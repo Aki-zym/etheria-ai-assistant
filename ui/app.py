@@ -849,7 +849,7 @@ def on_loaded(*_args):
     ico_path = os.path.join(BASE_DIR, 'app.ico')
     if os.path.exists(ico_path):
         try:
-            hwnd = win32gui.FindWindow(None, '瑞玛丽小助手V1.1')
+            hwnd = win32gui.FindWindow(None, '瑞玛丽小助手V1.2')
             if hwnd:
                 big = win32gui.LoadImage(None, ico_path, win32con.IMAGE_ICON, 0, 0,
                                          win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE)
@@ -994,7 +994,7 @@ def run():
             url = f'data:text/html,<html><body style="background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif"><div style="text-align:center"><h2>⚠️ 加载失败</h2><p>{"<br>".join(_errors)}</p></div></body></html>'
 
     window = webview.create_window(
-        title='瑞玛丽小助手V1.1',
+        title='瑞玛丽小助手V1.2',
         url=url,
         js_api=api,
         width=980,

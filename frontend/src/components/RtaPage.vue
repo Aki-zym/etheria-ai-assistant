@@ -54,7 +54,7 @@ async function captureTemplate() {
     <RtaWeekPanel v-show="subTab === 'weekly'" />
 
     <!-- 截图保存模板 -->
-    <div v-if="true">
+    <div v-if="false">
       <hr class="divider" />
       <div class="inline-form">
         <span class="hint-dir">→ templates/rta/</span>
