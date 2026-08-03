@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from core._base.input import post_click, lock_input
-from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, _find_manual_button, setup_preset
+from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, _find_manual_button
 from core.config import GAME_CONFIG
 
 # OCR 引擎（懒加载）
@@ -40,27 +40,84 @@ def _stpl(name: str) -> str:
     return os.path.join(_SHILIAN_TPL, name)
 
 
+def _xujin_setup_preset(bot) -> bool:
+    """虚烬专用预设 — 和 setup_preset 相同逻辑，但「使用预设」找不到时不返回 False（每期重置预设）。"""
+    hwnd = bot.game_window.hwnd
+
+    bot._log('点击预设按钮...')
+    pos = wait_for_image(
+        bot, tpl('预设.png'), timeout=GAME_CONFIG.preset_load_timeout)
+    if pos is None:
+        bot._log('[FAIL] 失败：未找到预设按钮')
+        return False
+    post_click(hwnd, pos[0], pos[1])
+    time.sleep(0.5)
+
+    if bot.find_image(tpl('使用预设.png')) is None:
+        bot._log('侧边栏未弹出，再点一次预设...')
+        post_click(hwnd, pos[0], pos[1])
+        time.sleep(0.5)
+
+    # 可能识别到多个「使用预设」——选最靠上、靠右的那个，只点第一个
+    import cv2 as _cv2
+    import numpy as _np
+    from core._base.template_match import _imread as _read_tpl
+    tpl_use = _read_tpl(tpl('使用预设.png'))
+    use_pos = None
+    if tpl_use is not None:
+        img = bot.capture()
+        if img is not None:
+            scr = _cv2.cvtColor(_np.array(img), _cv2.COLOR_RGB2BGR)
+            result = _cv2.matchTemplate(scr, tpl_use, _cv2.TM_CCOEFF_NORMED)
+            loc = _np.where(result >= GAME_CONFIG.template_threshold)
+            points = list(zip(*loc[::-1]))
+            if points:
+                dedup = []
+                for pt in sorted(points, key=lambda p: p[0]):
+                    if not any(abs(pt[0]-p[0]) < 20 and abs(pt[1]-p[1]) < 20 for p in dedup):
+                        dedup.append(pt)
+                th_use, tw_use = tpl_use.shape[:2]
+                best = min(dedup, key=lambda p: (p[1], p[0]))
+                use_pos = (bot.game_window.left + best[0] + tw_use // 2,
+                           bot.game_window.top + best[1] + th_use // 2)
+
+    if use_pos is None:
+        # bot._log('[WARN] PRESET_MISSING: 未找到「使用预设」，虚烬每期重置，继续运行。')
+        return True
+
+    bot._log(f'点击使用预设... 共识别{len(dedup) if dedup else 0}个, 选用Y最小({best[1]})')
+    post_click(hwnd, use_pos[0], use_pos[1])
+    time.sleep(0.5)
+
+    equipment_pos = wait_for_image(bot, tpl('预设装备占用.png'), timeout=3)
+    if equipment_pos is not None:
+        bot._log('检测到装备占用弹窗，点击确定...')
+        confirm_pos = wait_for_image(
+            bot, tpl('确定.png'), timeout=GAME_CONFIG.preset_load_timeout)
+        if confirm_pos is None:
+            bot._log('[FAIL] 失败：未找到确定按钮')
+            return False
+        post_click(hwnd, confirm_pos[0], confirm_pos[1])
+        time.sleep(0.5)
+
+    bot._log('[OK] 预设阵容设置完成')
+    return True
+
+
 def _xujin_wait_battle(bot, timeout=None):
     """虚烬专用战斗等待 — 和 enter_and_wait_battle 相同逻辑，
     但最后等待条件改为：每 10s 识别一次"虚烬异常排除.png"，识别到则结束。"""
     hwnd = bot.game_window.hwnd
     time.sleep(1.5)
     bot._log('检查手动模式...')
-    manual_pos = None
-    for attempt in range(2):
-        time.sleep(2)
-        manual_pos = _find_manual_button(bot, attempt + 1)
-        if manual_pos is not None:
-            bot._log(f'第 {attempt+1} 次检测到手动')
-            break
-        bot._log(f'第 {attempt+1} 次未检测到手动（可能还在加载）')
+    manual_pos = _find_manual_button(bot)
 
     if manual_pos is not None:
         post_click(hwnd, manual_pos[0], manual_pos[1])
         time.sleep(0.5)
     else:
         bot._log('未检测到手动按钮，直接进入预设')
-    if not setup_preset(bot):
+    if not _xujin_setup_preset(bot):
         return False
     bot._log('点击 F战斗...')
     pos = wait_for_image(bot, 'F战斗.png')
@@ -88,7 +145,7 @@ def _xujin_wait_battle(bot, timeout=None):
             return False
         # 交替快速扫描两个模板，找到任意一个就结束
         if ((bot.find_image(_stpl('虚烬异常排除.png'), multi_scale=False) is not None) or
-            (bot.find_image(_stpl('虚烬系统陷落.png'), multi_scale=False) is not None)):
+                (bot.find_image(_stpl('虚烬系统陷落.png'), multi_scale=False) is not None)):
             bot._log('检测到战斗结束标志，战斗结束')
             return True
         time.sleep(10)
@@ -155,8 +212,13 @@ def run_xujin_battle(bot, character_name: str = '', difficulty: str = '普通', 
             except Exception:
                 pass
 
-            # === 4.5. 点虚烬普通难度 → 检测虚烬危机选择（通关则切难度） ===
+            # === 4.5. 先检测是否已通关 → 再点虚烬普通难度 ===
+            if bot.find_image(_stpl('虚烬已通关标识.png'), multi_scale=False) is not None:
+                bot._log('检测到虚烬已通关标识')
+                exit_battle(bot, 30, 30, single_click=True)
+
             bot._log('点击虚烬普通难度...')
+
             pos = wait_for_image(bot, _stpl('虚烬普通难度.png'), timeout=5)
             if pos is not None:
                 post_click(hwnd, pos[0], pos[1])

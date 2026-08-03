@@ -10,6 +10,9 @@ a = Analysis(
         ('C:/Windows/System32/vcruntime140.dll', '.'),
         ('C:/Windows/System32/vcruntime140_1.dll', '.'),
         ('C:/Windows/System32/msvcp140.dll', '.'),
+        ('C:/Windows/System32/vcruntime140.dll', 'torch/lib'),
+        ('C:/Windows/System32/vcruntime140_1.dll', 'torch/lib'),
+        ('C:/Windows/System32/msvcp140.dll', 'torch/lib'),
         ('E:/etheriaZd/game-ai-assistant/venv/Lib/site-packages/pythonnet/runtime/Python.Runtime.dll', 'pythonnet/runtime'),
     ],
     datas=[

@@ -354,106 +354,110 @@ def enter_guild_home(bot) -> bool:
 _ocr_manual = None
 
 
-def _find_manual_button(bot, attempt=0):
-    time.sleep(1.5)
-    img = bot.capture()
-    if img is None:
-        return None
-    gw = bot.game_window
+def _find_manual_button(bot, max_attempts: int = 3):
+    """检测手动按钮，最多尝试 max_attempts 次，任意一次匹配到即返回坐标，全部失败返回 None。"""
+    for attempt in range(max_attempts):
+        time.sleep(1.5)
+        img = bot.capture()
+        if img is None:
+            bot._log(f'[尝试{attempt+1}/{max_attempts}] 截图失败')
+            continue
+        gw = bot.game_window
 
-    match = bot.find_image(tpl('手动.png'), multi_scale=False)
-    if match is not None:
-        abs_x = gw.left + match.x
-        abs_y = gw.top + match.y
-        bot._log(f'[尝试{attempt}] 模板匹配 手动: ({abs_x}, {abs_y})')
-        return (abs_x, abs_y)
-    bot._log(f'[尝试{attempt}] 模板失败，开始 OCR 识别 "手动"...')
-    global _ocr_manual
-    try:
-        # PyInstaller bundle: torch DLLs need explicit search path
-        import sys
-        if getattr(sys, 'frozen', False):
-            meipass = sys._MEIPASS
-            torch_lib = os.path.join(meipass, 'torch', 'lib')
-            if os.path.isdir(torch_lib):
-                os.add_dll_directory(torch_lib)
-        import easyocr
-        if _ocr_manual is None:
-            bot._log(f'[尝试{attempt}] 首次加载 EasyOCR 模型（可能需要几秒）...')
-            _ocr_manual = easyocr.Reader(['ch_sim', 'en'], gpu=False)
-            bot._log(f'[尝试{attempt}] EasyOCR 模型加载完成')
-        hw, hh = img.width // 2, img.height // 2
+        match = bot.find_image(tpl('手动.png'), multi_scale=False)
+        if match is not None:
+            abs_x = gw.left + match.x
+            abs_y = gw.top + match.y
+            bot._log(f'[尝试{attempt+1}/{max_attempts}] 模板匹配 手动: ({abs_x}, {abs_y})')
+            return (abs_x, abs_y)
+        bot._log(f'[尝试{attempt+1}/{max_attempts}] 模板失败，开始 OCR 识别 "手动"...')
+        global _ocr_manual
+        try:
+            # PyInstaller bundle: torch DLLs need explicit search path
+            import sys
+            if getattr(sys, 'frozen', False):
+                meipass = sys._MEIPASS
+                torch_lib = os.path.join(meipass, 'torch', 'lib')
+                if os.path.isdir(torch_lib):
+                    os.add_dll_directory(torch_lib)
+            import easyocr
+            if _ocr_manual is None:
+                bot._log(f'[尝试{attempt+1}/{max_attempts}] 首次加载 EasyOCR 模型（可能需要几秒）...')
+                _ocr_manual = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+                bot._log(f'[尝试{attempt+1}/{max_attempts}] EasyOCR 模型加载完成')
+            hw, hh = img.width // 2, img.height // 2
 
-        # 缩小扫描区域：只取右上角大约 1/8 的区域（"手动"按钮常驻位置）
-        # x: 右半 + 1/3 开始 → 更靠右，y: 顶部 1/3
-        rx = hw + hw // 3
-        rw = hw - hw // 3   # 右半再靠右 1/3
-        rh = hh // 3
-        roi = img.crop((rx, 0, rx + rw, rh))
+            # 缩小扫描区域：只取右上角大约 1/8 的区域（"手动"按钮常驻位置）
+            # x: 右半 + 1/3 开始 → 更靠右，y: 顶部 1/3
+            rx = hw + hw // 3
+            rw = hw - hw // 3   # 右半再靠右 1/3
+            rh = hh // 3
+            roi = img.crop((rx, 0, rx + rw, rh))
 
-        import cv2
+            import cv2
 
-        # 方案A：CLAHE 增强对比度（比二值化温和，不破坏文字边缘）
-        gray = cv2.cvtColor(np.array(roi), cv2.COLOR_RGB2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
+            # 方案A：CLAHE 增强对比度（比二值化温和，不破坏文字边缘）
+            gray = cv2.cvtColor(np.array(roi), cv2.COLOR_RGB2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
 
-        # 方案B：原图 + 放大（EasyOCR 对小文字需要放大）
-        scaled = cv2.resize(np.array(roi), None, fx=2, fy=2,
-                            interpolation=cv2.INTER_CUBIC)
+            # 方案B：原图 + 放大（EasyOCR 对小文字需要放大）
+            scaled = cv2.resize(np.array(roi), None, fx=2, fy=2,
+                                interpolation=cv2.INTER_CUBIC)
 
-        all_dets = []
+            all_dets = []
 
-        # 多轮识别：原图放大 + CLAHE增强图 + 原图 + 放宽阈值
-        for label, img_input in [
-            ('2x放大', scaled),
-            ('CLAHE', enhanced),
-            ('原图', np.array(roi)),
-        ]:
-            for det in _ocr_manual.readtext(
-                img_input,
-                text_threshold=0.4,
-                low_text=0.2,
-                link_threshold=0.2,
-                canvas_size=1280,
-                mag_ratio=2,
-            ):
-                txt = det[1]
-                conf = det[2]
-                all_dets.append((txt, conf, det[0], label))
-                # 只匹配"手动"或"手"（不能单独匹配"动"，"自动"里也有"动"）
-                if '手动' in txt or '手' in txt:
-                    box = det[0]
-                    if label == '2x放大':
-                        sx, sy = 0.5, 0.5
-                    else:
-                        sx, sy = 1.0, 1.0
-                    cx = rx + int(sum(p[0] * sx for p in box) / 4)
-                    cy = int(sum(p[1] * sy for p in box) / 4)
-                    bot._log(
-                        f'[尝试{attempt}] OCR({label}) 找到 "{txt}": ({cx}, {cy}) {conf:.0%}')
-                    return (gw.left + cx, gw.top + cy)
+            # 多轮识别：原图放大 + CLAHE增强图 + 原图 + 放宽阈值
+            for label, img_input in [
+                ('2x放大', scaled),
+                ('CLAHE', enhanced),
+                ('原图', np.array(roi)),
+            ]:
+                for det in _ocr_manual.readtext(
+                    img_input,
+                    text_threshold=0.4,
+                    low_text=0.2,
+                    link_threshold=0.2,
+                    canvas_size=1280,
+                    mag_ratio=2,
+                ):
+                    txt = det[1]
+                    conf = det[2]
+                    all_dets.append((txt, conf, det[0], label))
+                    # 只匹配"手动"或"手"（不能单独匹配"动"，"自动"里也有"动"）
+                    if '手动' in txt or '手' in txt:
+                        box = det[0]
+                        if label == '2x放大':
+                            sx, sy = 0.5, 0.5
+                        else:
+                            sx, sy = 1.0, 1.0
+                        cx = rx + int(sum(p[0] * sx for p in box) / 4)
+                        cy = int(sum(p[1] * sy for p in box) / 4)
+                        bot._log(
+                            f'[尝试{attempt+1}/{max_attempts}] OCR({label}) 找到 "{txt}": ({cx}, {cy}) {conf:.0%}')
+                        return (gw.left + cx, gw.top + cy)
 
-        # 兜底：把所有识别结果按 x 坐标排序拼起来，搜索 "手动"
-        all_dets.sort(key=lambda d: d[2][0][0])  # 按 x 坐标排序
-        joined = ''.join(d[0] for d in all_dets)
-        bot._log(f'[尝试{attempt}] 拼接文本: "{joined}"')
-        if '手动' in joined:
-            idx = joined.index('手动')
-            # 找到对应字符的 box
-            char_idx = 0
-            for txt, conf, box, label in all_dets:
-                if char_idx <= idx < char_idx + len(txt):
-                    cx = rx + int(sum(p[0] for p in box) / 4)
-                    cy = int(sum(p[1] for p in box) / 4)
-                    bot._log(f'[尝试{attempt}] 拼接匹配 "手动" @ ({cx}, {cy})')
-                    return (gw.left + cx, gw.top + cy)
-                char_idx += len(txt)
+            # 兜底：把所有识别结果按 x 坐标排序拼起来，搜索 "手动"
+            all_dets.sort(key=lambda d: d[2][0][0])  # 按 x 坐标排序
+            joined = ''.join(d[0] for d in all_dets)
+            bot._log(f'[尝试{attempt+1}/{max_attempts}] 拼接文本: "{joined}"')
+            if '手动' in joined:
+                idx = joined.index('手动')
+                # 找到对应字符的 box
+                char_idx = 0
+                for txt, conf, box, label in all_dets:
+                    if char_idx <= idx < char_idx + len(txt):
+                        cx = rx + int(sum(p[0] for p in box) / 4)
+                        cy = int(sum(p[1] for p in box) / 4)
+                        bot._log(f'[尝试{attempt+1}/{max_attempts}] 拼接匹配 "手动" @ ({cx}, {cy})')
+                        return (gw.left + cx, gw.top + cy)
+                    char_idx += len(txt)
 
-        unique = list(dict.fromkeys(d[0] for d in all_dets))
-        bot._log(f'[尝试{attempt}] OCR 识别到 {len(unique)} 个文字: {unique[:8]}')
-    except Exception as e:
-        bot._log(f'[尝试{attempt}] OCR 异常: {e}')
+            unique = list(dict.fromkeys(d[0] for d in all_dets))
+            bot._log(f'[尝试{attempt+1}/{max_attempts}] OCR 识别到 {len(unique)} 个文字: {unique[:8]}')
+        except Exception as e:
+            bot._log(f'[尝试{attempt+1}/{max_attempts}] OCR 异常: {e}')
+    bot._log(f'手动检测: {max_attempts} 次尝试均未识别到')
     return None
 
 
@@ -465,14 +469,7 @@ def enter_and_wait_battle(bot, battle_end_template='Buff.png', timeout=None):
     time.sleep(1.5)
     hwnd = bot.game_window.hwnd
     bot._log('检查手动模式...')
-    manual_pos = None
-    for attempt in range(2):
-        time.sleep(2)
-        manual_pos = _find_manual_button(bot, attempt + 1)
-        if manual_pos is not None:
-            bot._log(f'第 {attempt+1} 次检测到手动')
-            break
-        bot._log(f'第 {attempt+1} 次未检测到手动（可能还在加载）')
+    manual_pos = _find_manual_button(bot)
 
     if manual_pos is not None:
         post_click(hwnd, manual_pos[0], manual_pos[1])

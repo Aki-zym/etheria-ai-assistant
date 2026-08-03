@@ -160,7 +160,7 @@ async function testBgCapture() {
     </div>
 
     <!-- 截图保存模板（隐藏，需要时改 v-if="true"） -->
-    <div v-if="false">
+    <div v-if="true">
       <hr class="divider" />
       <div class="inline-form">
         <span class="hint-dir">→ templates/shilian/</span>

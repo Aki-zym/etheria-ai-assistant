@@ -51,6 +51,47 @@ def _ocr_number_in_region(bot, img, x, y, w, h):
     return 0
 
 
+def _find_all_matches_multi_scale(bot, template_path, threshold=None):
+    """多尺度模板匹配，返回所有匹配点的屏幕绝对坐标列表。取最左边用 pts.sort(key=lambda p: p[0])[0]。"""
+    import cv2
+    from core._base.template_match import _imread as _read_tpl
+    threshold = threshold or GAME_CONFIG.template_threshold
+    template = _read_tpl(template_path)
+    if template is None:
+        return []
+    img = bot.capture()
+    if img is None:
+        return []
+    scr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    th, tw = template.shape[:2]
+    scales = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3, 1.42, 1.5, 1.67, 1.7, 2.0, 2.3, 2.67]
+    all_pts = []  # (screen_x, screen_y)
+    gw = bot.game_window
+
+    for scale in scales:
+        new_w = int(tw * scale)
+        new_h = int(th * scale)
+        if new_w < 10 or new_h < 10:
+            continue
+        scaled_tpl = cv2.resize(template, (new_w, new_h))
+        sh, sw = scr.shape[:2]
+        if new_h > sh or new_w > sw:
+            continue
+        result = cv2.matchTemplate(scr, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+        loc = np.where(result >= threshold)
+        for pt in zip(*loc[::-1]):
+            screen_x = gw.left + pt[0] + new_w // 2
+            screen_y = gw.top + pt[1] + new_h // 2
+            all_pts.append((screen_x, screen_y))
+
+    # 去重: 20px 内的点合并
+    deduped = []
+    for p in all_pts:
+        if not any(abs(p[0]-dp[0]) < 20 and abs(p[1]-dp[1]) < 20 for dp in deduped):
+            deduped.append(p)
+    return deduped
+
+
 def run_guild_arena(bot) -> bool:
     """竞技场自动流程。"""
     hwnd = bot.game_window.hwnd
@@ -82,11 +123,13 @@ def run_guild_arena(bot) -> bool:
         time.sleep(0.8)
         battle_num = 0
         while bot.is_running:
-            pos = bot.find_image(tpl('竞技场积分.png'))
-            if pos is None:
+            pts = _find_all_matches_multi_scale(bot, tpl('竞技场积分.png'))
+            if not pts:
+                bot._log('[FAIL] 未检测到竞技场积分')
                 return False
-            sx = bot.game_window.left + pos.x
-            sy = bot.game_window.top + bot.game_window.height // 2
+            pts.sort(key=lambda p: p[0])  # 取最左边
+            sx, sy = pts[0]
+            sy = bot.game_window.top + bot.game_window.height // 2  # Y 固定在窗口半高
             post_click(hwnd, sx, sy)
             time.sleep(0.1)
             post_click(hwnd, sx, sy)

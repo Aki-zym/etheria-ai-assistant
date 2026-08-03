@@ -620,6 +620,15 @@ class Api:
         from core.events.xujin_battle import run_xujin_battle
         return run_xujin_battle(self.bot, character_name, difficulty, streak)
 
+    # ======== RTA ========
+    def run_rta_weekly_battle(self, character_name: str = '', difficulty: str = '普通', streak: int = 1) -> bool:
+        """RTA每周"""
+        if self.bot is None:
+            if not self.init_assistant().get('success'):
+                return False
+        from core.rta.weekly_battle import run_rta_weekly_battle
+        return run_rta_weekly_battle(self.bot, character_name, difficulty, streak)
+
     def run_guild_remind(self) -> bool:
         """提醒成员签到"""
         if self.bot is None:

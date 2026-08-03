@@ -238,14 +238,7 @@ def _yuanwang_wait_battle(bot, timeout=None):
     """
     hwnd = bot.game_window.hwnd
     bot._log('检查手动模式...')
-    manual_pos = None
-    for attempt in range(2):
-        time.sleep(2)
-        manual_pos = _find_manual_button(bot, attempt + 1)
-        if manual_pos is not None:
-            bot._log(f'第 {attempt+1} 次检测到手动')
-            break
-        bot._log(f'第 {attempt+1} 次未检测到手动（可能还在加载）')
+    manual_pos = _find_manual_button(bot)
 
     if manual_pos is not None:
         post_click(hwnd, manual_pos[0], manual_pos[1])
