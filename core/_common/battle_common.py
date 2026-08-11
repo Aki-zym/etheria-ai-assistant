@@ -4,6 +4,7 @@
 供 zhike_battle / yuanqi_battle 等模块导入使用。
 """
 import os
+import sys
 import time
 
 import numpy as np
@@ -12,6 +13,21 @@ from PIL import Image
 from core._base.input import post_click
 from core._base.window import focus_window, get_client_rect
 from core.config import GAME_CONFIG
+
+
+def _get_easyocr_model_dir():
+    """EasyOCR 模型目录。打包后指向 _internal/easyocr_models/，开发时用 ~/.EasyOCR/model/。"""
+    if getattr(sys, 'frozen', False):
+        return os.path.join(sys._MEIPASS, 'easyocr_models')
+    return os.path.join(os.path.expanduser('~'), '.EasyOCR', 'model')
+
+
+def _init_easyocr_reader(langs):
+    """初始化 EasyOCR Reader，使用预置模型（不联网下载）。"""
+    import easyocr
+    return easyocr.Reader(langs, gpu=False,
+                          model_storage_directory=_get_easyocr_model_dir(),
+                          download_enabled=False)
 
 _BASE_DIR = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
@@ -380,10 +396,9 @@ def _find_manual_button(bot, max_attempts: int = 3):
                 torch_lib = os.path.join(meipass, 'torch', 'lib')
                 if os.path.isdir(torch_lib):
                     os.add_dll_directory(torch_lib)
-            import easyocr
             if _ocr_manual is None:
                 bot._log(f'[尝试{attempt+1}/{max_attempts}] 首次加载 EasyOCR 模型（可能需要几秒）...')
-                _ocr_manual = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+                _ocr_manual = _init_easyocr_reader(['ch_sim', 'en'])
                 bot._log(f'[尝试{attempt+1}/{max_attempts}] EasyOCR 模型加载完成')
             hw, hh = img.width // 2, img.height // 2
 

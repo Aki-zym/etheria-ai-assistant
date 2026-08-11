@@ -11,7 +11,7 @@ from PIL import Image
 
 from core._base.input import post_click
 from core._base.window import get_client_rect
-from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, find_all_by_color, _find_manual_button, wait_for_image_gone
+from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, find_all_by_color, _find_manual_button, wait_for_image_gone, _init_easyocr_reader
 from core.config import GAME_CONFIG
 
 # 选牌 OCR 引擎（懒加载）
@@ -65,8 +65,7 @@ def _get_ocr():
             _tl = os.path.join(_sys._MEIPASS, 'torch', 'lib')
             if os.path.isdir(_tl):
                 os.add_dll_directory(_tl)
-        import easyocr
-        _ocr_reader_yuanwang = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+        _ocr_reader_yuanwang = _init_easyocr_reader(['ch_sim', 'en'])
     return _ocr_reader_yuanwang
 
 

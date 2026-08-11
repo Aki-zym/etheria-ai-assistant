@@ -4,7 +4,7 @@
 全 PostMessage 后台点击，零键盘依赖。
 """
 from core.config import GAME_CONFIG
-from core._common.battle_common import tpl, wait_for_image, open_sidebar, setup_preset, enter_and_wait_battle, exit_battle, enter_guild_home
+from core._common.battle_common import tpl, wait_for_image, open_sidebar, setup_preset, enter_and_wait_battle, exit_battle, enter_guild_home, _init_easyocr_reader
 from core._base.input import post_click
 from PIL import Image
 import numpy as np
@@ -27,8 +27,7 @@ def _get_reader():
             torch_lib = os.path.join(sys._MEIPASS, 'torch', 'lib')
             if os.path.isdir(torch_lib):
                 os.add_dll_directory(torch_lib)
-        import easyocr
-        _ocr_reader = easyocr.Reader(['en'], gpu=False)
+        _ocr_reader = _init_easyocr_reader(['en'])
     return _ocr_reader
 
 
@@ -381,10 +380,9 @@ def run_guild_remind(bot) -> bool:
         if img is None:
             return False
 
-        import easyocr
         import numpy as np
         import re
-        reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+        reader = _init_easyocr_reader(['ch_sim', 'en'])
         # 先全屏扫，找「协会成员」标题的位置
         bot._log('EasyOCR 全屏扫描，定位「协会成员」...')
         all_results = reader.readtext(np.array(img))
@@ -618,7 +616,6 @@ def run_test_stamina_check(bot) -> bool:
     """测试: 回主页 → 点体力图标 → 识别体力库存右边数字"""
     hwnd = bot.game_window.hwnd
     bot._running = True
-    import easyocr
     import numpy as np
     import re
     try:
@@ -662,7 +659,7 @@ def run_test_stamina_check(bot) -> bool:
         region = region.resize((nw * 2, nh * 2), Image.LANCZOS)
         arr = np.array(region)
         bot._log(f'数字区域 窗口内({nx},{ny}) {nw}×{nh} (×2放大) → OCR中...')
-        reader = easyocr.Reader(['en'], gpu=False)
+        reader = _init_easyocr_reader(['en'])
         results = reader.readtext(arr, allowlist='0123456789')
         if not results:
             bot._log('OCR 未识别到任何数字')

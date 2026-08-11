@@ -70,8 +70,8 @@ class EasyOCREngine:
 
     def _ensure_loaded(self):
         if self._reader is None:
-            import easyocr
-            self._reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+            from core._common.battle_common import _init_easyocr_reader
+            self._reader = _init_easyocr_reader(['ch_sim', 'en'])
 
     def recognize(self, image: Image.Image) -> List[TextMatch]:
         """识别图像中的文字"""

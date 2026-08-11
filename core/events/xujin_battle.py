@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from core._base.input import post_click, lock_input
-from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, _find_manual_button
+from core._common.battle_common import tpl, wait_for_image, open_sidebar, exit_battle, _find_manual_button, _init_easyocr_reader
 from core.config import GAME_CONFIG
 
 # OCR 引擎（懒加载）
@@ -25,8 +25,7 @@ def _get_ocr():
             _tl = os.path.join(_sys._MEIPASS, 'torch', 'lib')
             if os.path.isdir(_tl):
                 os.add_dll_directory(_tl)
-        import easyocr
-        _ocr_reader_xujin = easyocr.Reader(['en'], gpu=False)
+        _ocr_reader_xujin = _init_easyocr_reader(['en'])
     return _ocr_reader_xujin
 
 
