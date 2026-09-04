@@ -11,5 +11,5 @@ if %errorlevel% neq 0 (
 
 :: Run the app
 echo Running as admin...
-venv\Scripts\python scripts\run.py
+.venv\Scripts\python scripts\run.py
 pause

@@ -166,14 +166,7 @@ class Api:
                 _log_window_ref,), daemon=True).start()
 
     def _push_log(self, message: str):
-        """推送日志到 JS 前端（通过后台队列避免阻塞）+ 打印到控制台"""
-        try:
-            print(f"[Api] {message}")
-        except UnicodeEncodeError:
-            print(
-                f"[Api] {message.encode('gbk', errors='replace').decode('gbk')}")
-
-        # 推入队列，后台线程异步刷新到前端（不阻塞 API 线程）
+        """推到前端日志队列。控制台由 GameBot._log 打一次，这里不再重复 print。"""
         _log_queue.put(message)
 
         # 错误标记直接弹 alert（需要立即响应，不排队）
@@ -620,6 +613,21 @@ class Api:
         from core.events.xujin_battle import run_xujin_battle
         return run_xujin_battle(self.bot, character_name, difficulty, streak)
 
+    def run_zhuxian_battle(self, character_name: str = '', difficulty: str = '', streak: int = 1, stop_stage: str = None, from_home: bool = True) -> bool:
+        """自动推主线。stop_stage 如 4-7；也可把关卡写在 character_name。"""
+        if self.bot is None:
+            if not self.init_assistant().get('success'):
+                return False
+        from core.tasks import run_task
+        return run_task(
+            self.bot, 'zhuxian',
+            character_name=character_name,
+            difficulty=difficulty,
+            streak=streak,
+            stop_stage=stop_stage or character_name or None,
+            from_home=from_home,
+        )
+
     # ======== RTA ========
     def run_rta_weekly_battle(self, character_name: str = '', difficulty: str = '普通', streak: int = 1) -> bool:
         """RTA每周"""
@@ -653,9 +661,9 @@ class Api:
         import win32con
         hwnd = self.bot.game_window.hwnd
         print(f"[Api] hwnd={hwnd}")
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        win32gui.SetWindowPos(hwnd, 0, 0, 0, width, height,
-                              win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW)
+        from core._base.window import resize_window
+        if not resize_window(hwnd, width, height, 0, 0):
+            return {"success": False, "message": "缩放失败（需要管理员）"}
         # 缩放后再次刷新缓存坐标
         self.bot.init()
         print(f"[Api] SetWindowPos done, window cache refreshed")

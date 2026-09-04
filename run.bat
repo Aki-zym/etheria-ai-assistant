@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-venv\Scripts\python scripts/run.py %*
+.venv\Scripts\python scripts/run.py %*
 pause

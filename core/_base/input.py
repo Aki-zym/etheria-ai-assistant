@@ -241,13 +241,27 @@ def post_click(hwnd: int, screen_x: int, screen_y: int):
             pass
         time.sleep(0.02)
 
-    # 全部用 PostMessage（异步队列），游戏每帧按序处理
-    win32gui.PostMessage(target, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-    win32gui.PostMessage(target, win32con.WM_ACTIVATEAPP, 1, 0)
-    win32gui.PostMessage(target, win32con.WM_MOUSEMOVE, 0, lparam)
-    win32gui.PostMessage(target, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-    time.sleep(GAME_CONFIG.post_click_down_delay)
-    win32gui.PostMessage(target, win32con.WM_LBUTTONUP, 0, lparam)
+    try:
+        # 全部用 PostMessage（异步队列），游戏每帧按序处理
+        win32gui.PostMessage(target, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
+        win32gui.PostMessage(target, win32con.WM_ACTIVATEAPP, 1, 0)
+        win32gui.PostMessage(target, win32con.WM_MOUSEMOVE, 0, lparam)
+        win32gui.PostMessage(target, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+        time.sleep(GAME_CONFIG.post_click_down_delay)
+        win32gui.PostMessage(target, win32con.WM_LBUTTONUP, 0, lparam)
+        time.sleep(GAME_CONFIG.post_click_up_delay)
+        return
+    except Exception as e:
+        # 游戏完整性级别更高时 PostMessage 会被 UIPI 拒绝（拒绝访问）。
+        # 管理员进程可用 SendInput 点；普通进程这里仍会失败。
+        print(f'[post_click] PostMessage 失败 ({e})，改用前台点击')
+
+    try:
+        from core._base.window import focus_window
+        focus_window(hwnd)
+    except Exception:
+        pass
+    click_window(hwnd, screen_x, screen_y)
     time.sleep(GAME_CONFIG.post_click_up_delay)
 
 

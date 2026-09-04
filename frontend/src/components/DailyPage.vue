@@ -4,6 +4,7 @@ import ZhikePanel from "./daily/ZhikePanel.vue";
 import YuanqiPanel from "./daily/YuanqiPanel.vue";
 import GuildPanel from "./daily/GuildPanel.vue";
 import QiannengPanel from "./daily/QiannengPanel.vue";
+import ZhuxianPanel from "./daily/ZhuxianPanel.vue";
 import TemplateCapture from "./TemplateCapture.vue";
 
 const addLog = inject<(msg: string) => void>("addLog", () => {});
@@ -14,6 +15,7 @@ const subTabs = [
   { id: "yuanqi", label: "源器" },
   { id: "guild", label: "公会/竞技场" },
   { id: "qianneng", label: "潜能/经验" },
+  { id: "zhuxian", label: "主线" },
 ];
 
 const gwWidth = ref(960);
@@ -64,6 +66,7 @@ async function resizeGame() {
     <YuanqiPanel v-show="subTab === 'yuanqi'" />
     <GuildPanel v-show="subTab === 'guild'" />
     <QiannengPanel v-show="subTab === 'qianneng'" />
+    <ZhuxianPanel v-show="subTab === 'zhuxian'" />
     <TemplateCapture v-if="false" />
   </section>
 </template>

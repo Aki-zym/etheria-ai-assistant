@@ -72,6 +72,12 @@ class GameConfig:
     resize_width: int = 960
     resize_height: int = 540
 
+    # ---- 主线 ----
+    zhuxian_stop_stage: str = "4-7"   # 打完这关就停，如 "5-7"
+    zhuxian_from_home: bool = True    # True=从主界面点挑战/主线进入
+    zhuxian_use_preset: bool = False  # 上场前是否套预设
+    zhuxian_stale_rounds: int = 8     # 连续认不出界面就放弃
+
 
 GAME_CONFIG = GameConfig()
 

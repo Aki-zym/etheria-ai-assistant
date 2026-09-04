@@ -20,7 +20,9 @@ export function usePywebview() {
   }
 
   function addLog(msg: string) {
-    logs.value.push(`[${new Date().toLocaleTimeString()}] ${msg}`)
+    const d = new Date()
+    const ms = String(d.getMilliseconds()).padStart(3, '0')
+    logs.value.push(`[${d.toLocaleTimeString()}.${ms}] ${msg}`)
     // 检测错误标记，弹窗提示
     if (msg.includes('PRESET_MISSING')) {
       setTimeout(() => alert('亲，您没有设置预设阵容哦，请设置后回到主页重新开始。'), 100)

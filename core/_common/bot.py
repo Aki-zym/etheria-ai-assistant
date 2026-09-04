@@ -338,10 +338,13 @@ class GameBot:
         self._log_callbacks.append(callback)
 
     def _log(self, message: str):
+        from datetime import datetime
+        ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+        line = f"{ts} [Bot] {message}"
         try:
-            print(f"[Bot] {message}")
+            print(line, flush=True)
         except UnicodeEncodeError:
-            print(f"[Bot] {repr(message)}")
+            print(f"{ts} [Bot] {repr(message)}", flush=True)
         for cb in self._log_callbacks:
             try:
                 cb(message)

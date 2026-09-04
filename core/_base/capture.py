@@ -145,6 +145,14 @@ def is_black_image(image: Image.Image, threshold: float = 10.0) -> bool:
     return float(arr.mean()) < threshold
 
 
+def _is_unreal_window(game_window: GameWindow) -> bool:
+    """当前客户端是 UnrealWindow（伊瑟 PC），PrintWindow/BitBlt 会拿到脏 GDI 缓冲。"""
+    try:
+        return 'Unreal' in win32gui.GetClassName(game_window.hwnd)
+    except Exception:
+        return False
+
+
 def capture_game_screen(
     game_window: GameWindow,
     background_mode: bool = True,
@@ -164,13 +172,15 @@ def capture_game_screen(
         PIL.Image 或 None
     """
     if background_mode:
-        # 按优先级尝试各种后台截图方法
-        # PrintWindow 直接从 DWM 抓窗口内容，被遮挡也能截到 → 排最前
-        methods = [
-            lambda: capture_printwindow_pca(game_window.hwnd, game_window),
-            lambda: capture_dxcam(game_window),
-            lambda: capture_bitblt(game_window.hwnd, game_window),
-        ]
+        unreal = _is_unreal_window(game_window)
+        # Unreal：PrintWindow 全黑，BitBlt 是过期 GDI 残影（均值约 30，过不了黑帧检测）。
+        # 直接走 MSS 桌面合成；窗口没被挡住时不需要抢焦点。
+        methods = []
+        if not unreal:
+            methods.append(lambda: capture_printwindow_pca(game_window.hwnd, game_window))
+        methods.append(lambda: capture_dxcam(game_window))
+        if not unreal:
+            methods.append(lambda: capture_bitblt(game_window.hwnd, game_window))
 
         for method in methods:
             try:
@@ -180,8 +190,11 @@ def capture_game_screen(
             except Exception:
                 continue
 
+        mss_img = capture_mss(game_window)
+        if mss_img is not None and not is_black_image(mss_img):
+            return mss_img
         if not auto_focus:
-            return capture_mss(game_window)
+            return mss_img
 
     # 前台截图 - 自动切换到游戏窗口
     return _capture_with_auto_focus(game_window)

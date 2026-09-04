@@ -4,6 +4,10 @@ __pycache__/
 *.pyo
 *.pyd
 venv/
+.venv/
+
+# 运行截图
+screenshots/
 *.egg-info/
 
 # PyInstaller

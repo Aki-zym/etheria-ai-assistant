@@ -186,3 +186,16 @@ def get_client_rect(hwnd: int) -> Tuple[int, int, int, int]:
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
     point = win32gui.ClientToScreen(hwnd, (left, top))
     return (point[0], point[1], point[0] + right - left, point[1] + bottom - top)
+
+
+def resize_window(hwnd: int, width: int, height: int, left: int = 0, top: int = 0) -> bool:
+    """把窗口放到 (left, top) 并设为 width×height。需要管理员才能改游戏窗。"""
+    try:
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetWindowPos(
+            hwnd, 0, left, top, width, height,
+            win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW,
+        )
+        return True
+    except Exception:
+        return False
