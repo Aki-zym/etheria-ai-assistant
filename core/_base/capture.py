@@ -3,6 +3,7 @@
 """
 import time
 import os
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +14,86 @@ import win32gui
 import win32con
 
 from core._base.window import GameWindow
+
+
+# ============================================================
+# WGC 后台捕获（最优先）：Windows.Graphics.Capture
+# 走 DWM 合成层，窗口被完全遮挡时也能持续出帧；最小化时游戏停止
+# 渲染，帧过期自动回落下一路。依赖可选包 windows-capture，
+# 未安装时本路自动跳过。会话常驻，窗口句柄/尺寸变化时重建。
+# ============================================================
+_wgc_session = {'key': None, 'control': None, 'frame': None, 'ts': 0.0}
+
+
+def _wgc_release():
+    control = _wgc_session.get('control')
+    if control is not None:
+        try:
+            control.stop()
+        except Exception:
+            pass
+    _wgc_session.update(key=None, control=None, frame=None, ts=0.0)
+
+
+def _wgc_ensure(game_window: GameWindow) -> bool:
+    """确保存在对目标窗口的 WGC 捕获会话（未建/失效/尺寸变化则重建）。"""
+    key = (game_window.hwnd, game_window.width, game_window.height)
+    if _wgc_session['key'] == key and _wgc_session['control'] is not None:
+        return True
+    _wgc_release()
+    try:
+        from windows_capture import WindowsCapture
+
+        cap = WindowsCapture(
+            cursor_capture=False,
+            draw_border=False,
+            window_hwnd=game_window.hwnd,
+        )
+
+        @cap.event
+        def on_frame_arrived(frame, capture_control):
+            try:
+                _wgc_session['frame'] = frame.frame_buffer
+                _wgc_session['ts'] = time.time()
+            except Exception:
+                pass
+
+        @cap.event
+        def on_closed():
+            # 窗口关闭：标记会话失效，下次调用时重建（失败则回落）
+            _wgc_session['control'] = None
+
+        _wgc_session['control'] = cap.start_free_threaded()
+        _wgc_session['key'] = key
+        # 等首帧（实测 ~0.2s），最多 1.5s
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            if _wgc_session['frame'] is not None:
+                break
+            time.sleep(0.02)
+        return True
+    except Exception:
+        _wgc_release()
+        return False
+
+
+def capture_wgc(game_window: GameWindow) -> Optional[Image.Image]:
+    """WGC 截图：取捕获会话最新帧。帧过期（如窗口最小化）返回 None 回落。"""
+    try:
+        if not _wgc_ensure(game_window):
+            return None
+        buf = _wgc_session['frame']
+        ts = _wgc_session['ts']
+        if buf is None or time.time() - ts > 2.0:
+            return None
+        rgb = np.ascontiguousarray(buf[:, :, :3][:, :, ::-1])  # BGRA -> RGB
+        img = Image.fromarray(rgb)
+        # DPI/边框差异兜底：帧尺寸与窗口矩形不一致时归一化，保证坐标系一致
+        if img.size != (game_window.width, game_window.height):
+            img = img.resize((game_window.width, game_window.height))
+        return img
+    except Exception:
+        return None
 
 
 def capture_mss(game_window: GameWindow) -> Optional[Image.Image]:
@@ -176,6 +257,8 @@ def capture_game_screen(
         # Unreal：PrintWindow 全黑，BitBlt 是过期 GDI 残影（均值约 30，过不了黑帧检测）。
         # 直接走 MSS 桌面合成；窗口没被挡住时不需要抢焦点。
         methods = []
+        # WGC 最优先：被遮挡也能出帧（需 windows-capture 包，未安装自动跳过）
+        methods.append(lambda: capture_wgc(game_window))
         if not unreal:
             methods.append(lambda: capture_printwindow_pca(game_window.hwnd, game_window))
         methods.append(lambda: capture_dxcam(game_window))

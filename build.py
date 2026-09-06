@@ -6,6 +6,9 @@ import shutil
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# 版本单一来源：core/__init__.py（zip 名随版本号自动更新）
+from core import __version__
+
 
 def run(cmd, cwd=None, desc=""):
     print(f"\n{'='*50}")
@@ -27,7 +30,7 @@ run("python -m PyInstaller YiseAssistant.spec --noconfirm",
 
 # Step 3: zip dist
 dist_dir = os.path.join(ROOT, "dist", "瑞玛丽小助手")
-zip_path = os.path.join(ROOT, "dist", "瑞玛丽小助手_V1.2日志版.zip")
+zip_path = os.path.join(ROOT, "dist", f"瑞玛丽小助手_V{__version__}.zip")
 if os.path.exists(zip_path):
     os.remove(zip_path)
 print(f"\n{'='*50}")

@@ -24,6 +24,11 @@ dist/
 # 调试
 debug_screenshots/
 
+# 开发草稿与运行产物（P0A 冻结期新增）
+tmp/
+scene_packs/
+debug/
+
 # 系统文件
 Thumbs.db
 .DS_Store

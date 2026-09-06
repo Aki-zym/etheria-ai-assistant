@@ -187,7 +187,38 @@ def _ocr_current_stage(bot):
     return stage
 
 
-def _wait_story_battle(bot, use_preset: bool) -> bool:
+def _use_stamina_potion(bot) -> bool:
+    """在体力兑换弹窗内用体力药兑换体力。成功返回 True（弹窗已关闭）。"""
+    bot._log('体力不足 → 自动使用体力药兑换...')
+    potion_tpl = tpl('体力兑换药.png')
+    if not os.path.exists(potion_tpl):
+        bot._log('[WARN] 缺少模板 templates/richang/体力兑换药.png（体力兑换弹窗里的体力药图标）')
+        bot._log('[WARN] 可用界面「截模板」功能截取该图标，或在主线面板关闭「体力不足自动用药」')
+        return False
+    pos = wait_for_image(bot, potion_tpl, timeout=5)
+    if pos is None:
+        bot._log('[FAIL] 体力兑换弹窗中未找到体力药图标')
+        return False
+    _click(bot, pos)
+    time.sleep(1.0)
+    confirm = wait_for_image(bot, tpl('确定.png'), timeout=3)
+    if confirm is None:
+        confirm = wait_for_image(bot, tpl('协会提示确定按钮.png'), timeout=2)
+    if confirm is not None:
+        _click(bot, confirm)
+        bot._log('已确认兑换')
+    else:
+        bot._log('未出现确认按钮（可能点药图标已直接兑换）')
+    time.sleep(1.5)
+    if _find(bot, tpl('体力兑换.png'), multi_scale=False) is None:
+        bot._log('[OK] 体力兑换完成')
+        return True
+    bot._log('[FAIL] 兑换后体力兑换弹窗仍未关闭')
+    return False
+
+
+def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) -> bool:
+    """进战斗后等待结束。返回 True=正常结束 / False=需中止 / 'failed'=战斗失败（已点空白返回）。"""
     hwnd = bot.game_window.hwnd
     time.sleep(1.0)
     bot._log('检查手动模式...')
@@ -212,11 +243,9 @@ def _wait_story_battle(bot, use_preset: bool) -> bool:
         return False
     bot._log('点击战斗...')
     _click(bot, fight)
+    # 点完战斗直接进入扫描模式：正常流程不弹「确定」，只有体力不足才弹
+    # 体力兑换弹窗，由下方循环内的体力检测处理，省掉每次战斗固定 4-6s 空等
     time.sleep(2)
-    confirm = wait_for_image(bot, tpl('确定.png'), timeout=4)
-    if confirm is not None:
-        _click(bot, confirm)
-        time.sleep(1)
 
     timeout = GAME_CONFIG.battle_end_timeout
     bot._log(f'战斗中，每 2s 扫结束标志（最多 {timeout}s）...')
@@ -225,6 +254,12 @@ def _wait_story_battle(bot, use_preset: bool) -> bool:
     while time.time() < deadline:
         if not bot.is_running:
             return False
+        # 战斗失败画面：必须先于通用结束标志判断——失败页底部的
+        # 「点击空白处返回」和胜利页同名提示会混淆，这里优先分流
+        if _find(bot, tpl('系统陷落.png')) is not None:
+            bot._log('[WARN] 系统陷落：战斗失败')
+            _click_blank(bot)
+            return 'failed'
         if _battle_ended(bot):
             seen += 1
             if seen >= 2:
@@ -233,8 +268,20 @@ def _wait_story_battle(bot, use_preset: bool) -> bool:
         else:
             seen = 0
         if _find(bot, tpl('体力兑换.png'), multi_scale=False) is not None:
-            bot._log('[WARN] STAMINA_MISSING: 体力不足')
-            return False
+            if not use_stamina_potion:
+                bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线（未开启自动用体力药）')
+                return False
+            if not _use_stamina_potion(bot):
+                return False
+            # 兑换后可能回到准备画面，重新点战斗；若已自动开战则找不到按钮，继续扫描
+            time.sleep(1.5)
+            again = _find(bot, '主线战斗.png')
+            if again is None:
+                again = _abs_pos(bot, bot.find_image(tpl('F战斗.png')))
+            if again is not None:
+                bot._log('重新点击战斗...')
+                _click(bot, again)
+                time.sleep(2)
         time.sleep(2)
     bot._log('[WARN] 等待战斗结束超时，继续')
     return True
@@ -330,15 +377,19 @@ def _enter_from_home(bot) -> bool:
 
 def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                        streak: int = 1, stop_stage: str = None,
-                       from_home: bool = None) -> bool:
+                       from_home: bool = None,
+                       use_stamina_potion: bool = None) -> bool:
     """
     自动推主线。stop_stage 默认 4-7，打完该关后的获得物品即停。
+    use_stamina_potion: 体力不足时自动用体力药兑换（默认读 GAME_CONFIG）。
     """
     hwnd = bot.game_window.hwnd
     bot._running = True
     stop_stage = stop_stage or GAME_CONFIG.zhuxian_stop_stage or character_name or '4-7'
     if from_home is None:
         from_home = GAME_CONFIG.zhuxian_from_home
+    if use_stamina_potion is None:
+        use_stamina_potion = GAME_CONFIG.zhuxian_use_stamina_potion
     use_preset = GAME_CONFIG.zhuxian_use_preset
     stop = _parse_stage(stop_stage)
     if stop is None:
@@ -356,14 +407,20 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 return False
 
         stale = 0
+        fail_count = 0
         last_stage = None
         fighting_stage = None
         loot_seen_for_stop = False
 
         while bot.is_running:
             if bot.find_image(tpl('体力兑换.png')) is not None:
-                bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线')
-                return False
+                if not use_stamina_potion:
+                    bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线')
+                    return False
+                if not _use_stamina_potion(bot):
+                    return False
+                stale = 0
+                continue
 
             # 1. 剧情跳过（无确认）— 只在右上角找，避免和地图 UI 串
             gw = bot.game_window
@@ -406,6 +463,7 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 if loot_seen_for_stop:
                     bot._log(f'[OK] 已打完停止关 #{stop[0]}-{stop[1]}')
                     return True
+                fail_count = 0  # 胜利后清空连败计数
                 stale = 0
                 continue
 
@@ -425,6 +483,7 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 if loot_seen_for_stop:
                     bot._log(f'[OK] 已打完停止关 #{stop[0]}-{stop[1]}')
                     return True
+                fail_count = 0
                 stale = 0
                 continue
 
@@ -433,7 +492,14 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
             if fight is None:
                 fight = _abs_pos(bot, bot.find_image(tpl('F战斗.png')))
             if fight is not None:
-                if not _wait_story_battle(bot, use_preset):
+                result = _wait_story_battle(bot, use_preset, use_stamina_potion)
+                if result == 'failed':
+                    fail_count += 1
+                    bot._log(f'战斗失败 {fail_count}/3')
+                    if fail_count >= 3:
+                        bot._log('[FAIL] 连续 3 次战斗失败（系统陷落），停止主线')
+                        return False
+                elif not result:
                     return False
                 stale = 0
                 continue
@@ -455,6 +521,45 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 bot._log('点击前往挑战')
                 _click(bot, go)
                 # 进战斗有 Scripts Loading，最多等 25s 直到出现战斗/跳过/结算
+                deadline = time.time() + 25
+                while time.time() < deadline and bot.is_running:
+                    time.sleep(1.2)
+                    if (_find(bot, '主线战斗.png') is not None
+                            or _find(bot, '主线跳过.png') is not None
+                            or _find(bot, '异常排除.png') is not None
+                            or bot.find_image(tpl('F战斗.png')) is not None):
+                        break
+                stale = 0
+                continue
+
+            # 5.5 关卡选择弹窗（点地图 NEW 节点后弹出的子关列表，如 #8-8 → #08-01~05）：
+            # 弹窗底部「敌方情报」的金色图标也是黄色且更靠中线，会污染通用 NEW
+            # 色块逻辑（点小怪无效果 → stale 被清零 → 永久循环），必须提前精确处理
+            popup_go = _find(bot, '关卡弹窗前往挑战.png', threshold=0.80)
+            if popup_go is not None:
+                badge = _find(bot, '关卡弹窗NEW.png', threshold=0.72)
+                if badge is None:
+                    # 模板兜底：只在弹窗右侧子关列表区域内找黄色点
+                    gw = bot.game_window
+                    yellows = find_all_by_color(bot, target_rgb=(255, 214, 40), tolerance=45)
+                    in_popup = [p for p in yellows
+                                if p[0] > gw.left + gw.width * 0.62
+                                and gw.top + 40 < p[1] < gw.top + gw.height * 0.55]
+                    if in_popup:
+                        in_popup.sort(key=lambda p: (p[1], p[0]))
+                        badge = in_popup[0]
+                        bot._log(f'关卡弹窗：色块定位 NEW 子关 {badge}')
+                if badge is not None:
+                    bot._log('关卡弹窗：点击 NEW 子关')
+                    _click(bot, badge)
+                    time.sleep(0.8)
+                else:
+                    bot._log('[WARN] 关卡弹窗内无 NEW 子关，点空白关闭弹窗')
+                    _click_blank(bot)
+                    continue
+                bot._log('关卡弹窗：点击前往挑战')
+                _click(bot, popup_go)
+                # 进战斗有加载，最多等 25s 直到出现战斗/跳过/结算
                 deadline = time.time() + 25
                 while time.time() < deadline and bot.is_running:
                     time.sleep(1.2)

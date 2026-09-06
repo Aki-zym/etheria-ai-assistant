@@ -40,7 +40,7 @@ cd frontend && npm run dev     # pywebview 自动连接 localhost:5173
 Vue 3 前端 (frontend/src)          面板 / 开关 / 日志展示
         │  pywebview JS Bridge —— Api 类方法直接暴露给 JS 调用
         ▼
-Api 类 (ui/app.py)                 参数校验、每个任务开一条 daemon 线程
+Api 类 (ui/app.py)                 参数校验、调用任务函数（同步执行）
         ▼
 GameBot (core/_common/bot.py)      统一操作接口：截图/找图/找字/点击/日志
         ▼
@@ -55,17 +55,24 @@ GameBot (core/_common/bot.py)      统一操作接口：截图/找图/找字/点
 
 ## 2. 感知层：程序如何"看见"游戏
 
-### 2.1 四路截图降级链 — `capture.py: capture_game_screen`
+### 2.1 五路截图降级链 — `capture.py: capture_game_screen`
 
 ```
-PrintWindow(PW_RENDERFULLCONTENT)   ← 首选：直接从 DWM 拿窗口内容，被遮挡也能截
+WGC (Windows.Graphics.Capture)      ← 最优先：DWM 合成层，窗口被完全遮挡也能出帧（需 windows-capture 包）
+   ↓ 失败/帧过期(如最小化，>2s 无新帧)
+PrintWindow(PW_RENDERFULLCONTENT)   ← 非 Unreal 窗口：直接从 DWM 拿窗口内容
    ↓ 失败/黑帧
 DXCam
    ↓
-BitBlt                              ← 窗口可被遮挡但需可见
+BitBlt                              ← 非 Unreal；窗口可被遮挡但需可见
    ↓
 MSS 前台截图（自动抢焦点，会短暂打扰用户）
 ```
+
+WGC 会话常驻（识别时只取最新帧 ~40ms），窗口句柄/尺寸变化自动重建；
+伊瑟是 UnrealWindow（PrintWindow/BitBlt 拿到黑帧/脏缓冲会被跳过），
+实际主路 = **WGC → MSS**。窗口最小化时游戏停止渲染，WGC 帧过期自动回落
+（如需纯后台，把窗口移出屏幕外保持还原状态即可）。
 
 - 每张截图做**黑帧检测**（`is_black_image`，均值 < 10 判为后台截图失败，自动跳下一路）。
 - 超时兜底：`wait_for_image` 超时后会新建 MSS 实例强制截一张"新鲜帧"，绕过 DXGI 缓存/脏帧问题。
@@ -185,7 +192,7 @@ while 未停止:
 
 ## 6. 线程模型与停止机制
 
-- 前端点「开始」→ `Api` 方法把 `run_xxx_battle` 扔进 daemon 线程（ui/app.py）。
+- 前端点「开始」→ `Api` 方法在 pywebview API 线程上同步调用 `run_xxx_battle`（ui/app.py；仅遗留的 start_dungeon 走 daemon 线程）。任务调度收敛到统一 Tasker 属于升级 Phase 2，见 `docs/MAA-架构分析与Etheria升级路线.md`。
 - **停止** = 设置 `bot._running = False`；所有 `wait_for_image` / 循环开头都检查 `bot.is_running`，秒级响应。
 - **日志** = `bot.on_log(回调)` → `Api._push_log` → 队列 → 刷线线程 → webview JS 事件 → 前端日志面板。
 - 后端同时维护 `run.bat` 兼容入口（走 `scripts/run.py`）。

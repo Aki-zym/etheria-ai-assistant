@@ -11,6 +11,7 @@ const registerTask = inject<
 const enabled = ref(false);
 const stopStage = ref("4-7");
 const fromHome = ref(true);
+const usePotion = ref(false);
 
 function getApi() {
   return window.pywebview?.api as any;
@@ -25,6 +26,7 @@ async function runOnce(): Promise<boolean> {
     1,
     stopStage.value,
     fromHome.value,
+    usePotion.value,
   );
 }
 
@@ -75,6 +77,10 @@ async function stopTask() {
           placeholder="4-7"
         />
       </div>
+      <label class="opt">
+        <input type="checkbox" v-model="usePotion" class="check" />
+        体力不足自动用药
+      </label>
       <label class="from-home">
         <input type="checkbox" v-model="fromHome" class="check" />
         从主界面进入
@@ -135,6 +141,14 @@ async function stopTask() {
 }
 .stage:focus {
   border-color: #8b5cf6;
+}
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
 }
 .from-home {
   margin-left: auto;

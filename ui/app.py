@@ -3,15 +3,24 @@
 提供原生窗口 + Vue 3 界面
 """
 import queue
+import sys
+import os
+
+# 确保 core 模块可导入（必须先于 core 导入，否则直接 python ui/app.py 会 ModuleNotFoundError）
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
 from core._base.window import GameWindow
 from core._base.selector import select_region_from_fullscreen
 from core._base.capture import save_template, capture_mss
 from core.config import get_dungeon_list, load_env, GAME_CONFIG
 from core._common.bot import GameBot
+from core import __version__
 import webview
+
+# 窗口标题统一由版本号派生（图标设置按标题找窗口，与 create_window 必须同源）
+APP_TITLE = f'瑞玛丽小助手 V{__version__}'
 from PIL import Image
-import sys
-import os
 
 if getattr(sys, 'frozen', False):
     torch_lib = os.path.join(sys._MEIPASS, 'torch', 'lib')
@@ -119,11 +128,6 @@ os.environ['FLAGS_use_mkldnn'] = '0'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 
-# 确保 core 模块可导入
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
-
-
 # 日志队列 — 后台线程刷新到前端，避免长 API 调用阻塞 evaluate_js 渲染
 _log_queue = queue.Queue()
 _log_window_ref = [None]  # 列表包装，线程安全地引用 window 对象
@@ -190,7 +194,7 @@ class Api:
             import urllib.request
             import json
             req = urllib.request.Request(
-                'https://api.github.com/repos/WhiteFree22333/etheria-ai-assistant/releases/latest',
+                'https://api.github.com/repos/Aki-zym/etheria-ai-assistant/releases/latest',
                 headers={'User-Agent': 'remary-assistant'}
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -613,7 +617,7 @@ class Api:
         from core.events.xujin_battle import run_xujin_battle
         return run_xujin_battle(self.bot, character_name, difficulty, streak)
 
-    def run_zhuxian_battle(self, character_name: str = '', difficulty: str = '', streak: int = 1, stop_stage: str = None, from_home: bool = True) -> bool:
+    def run_zhuxian_battle(self, character_name: str = '', difficulty: str = '', streak: int = 1, stop_stage: str = None, from_home: bool = True, use_stamina_potion: bool = False) -> bool:
         """自动推主线。stop_stage 如 4-7；也可把关卡写在 character_name。"""
         if self.bot is None:
             if not self.init_assistant().get('success'):
@@ -626,6 +630,7 @@ class Api:
             streak=streak,
             stop_stage=stop_stage or character_name or None,
             from_home=from_home,
+            use_stamina_potion=bool(use_stamina_potion),
         )
 
     # ======== RTA ========
@@ -857,7 +862,7 @@ def on_loaded(*_args):
     ico_path = os.path.join(BASE_DIR, 'app.ico')
     if os.path.exists(ico_path):
         try:
-            hwnd = win32gui.FindWindow(None, '瑞玛丽小助手V1.2')
+            hwnd = win32gui.FindWindow(None, APP_TITLE)
             if hwnd:
                 big = win32gui.LoadImage(None, ico_path, win32con.IMAGE_ICON, 0, 0,
                                          win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE)
@@ -1002,7 +1007,7 @@ def run():
             url = f'data:text/html,<html><body style="background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif"><div style="text-align:center"><h2>⚠️ 加载失败</h2><p>{"<br>".join(_errors)}</p></div></body></html>'
 
     window = webview.create_window(
-        title='瑞玛丽小助手V1.2',
+        title=APP_TITLE,
         url=url,
         js_api=api,
         width=980,

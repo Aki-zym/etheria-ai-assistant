@@ -1,22 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import pythonnet
+
 from PyInstaller.building.datastruct import TOC
 
 block_cipher = None
 
+# 动态定位构建解释器 site-packages 中的二进制资源（不硬编码绝对路径，换机器可直接构建）
+binaries = []
+
+# pythonnet 运行时 DLL（pywebview EdgeChromium 后端需要）
+_pythonnet_runtime = os.path.join(
+    os.path.dirname(pythonnet.__file__), 'runtime', 'Python.Runtime.dll')
+if os.path.isfile(_pythonnet_runtime):
+    binaries.append((_pythonnet_runtime, 'pythonnet/runtime'))
+
+# certifi SSL 证书（EasyOCR 联网下载模型时验证 HTTPS 需要；未安装则跳过）
+try:
+    import certifi
+    binaries.append((certifi.where(), 'certifi'))
+except ImportError:
+    pass
 
 a = Analysis(
     ['ui/app.py'],
     pathex=[],
-    binaries=[
-        ('E:/etheriaZd/game-ai-assistant/venv/Lib/site-packages/pythonnet/runtime/Python.Runtime.dll', 'pythonnet/runtime'),
-        # certifi SSL 证书（EasyOCR 下载模型时验证 HTTPS 需要）
-        ('E:/etheriaZd/game-ai-assistant/venv/Lib/site-packages/certifi/cacert.pem', 'certifi'),
-    ],
+    binaries=binaries,
     datas=[
         ('ui/static', 'ui/static'),
         ('templates', 'templates'),
         ('easyocr_models', 'easyocr_models'),
-        ('.env', '.'),
+        # 不打包 .env：所有配置项有代码内默认值，用户可在 exe 旁自放 .env 覆盖
         ('app.ico', '.'),
     ],
     hiddenimports=[

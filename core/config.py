@@ -3,6 +3,7 @@
 所有可调参数在此集中管理，通过 .env 文件覆盖默认值。
 """
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -76,6 +77,7 @@ class GameConfig:
     zhuxian_stop_stage: str = "4-7"   # 打完这关就停，如 "5-7"
     zhuxian_from_home: bool = True    # True=从主界面点挑战/主线进入
     zhuxian_use_preset: bool = False  # 上场前是否套预设
+    zhuxian_use_stamina_potion: bool = False  # 体力不足时自动用体力药兑换
     zhuxian_stale_rounds: int = 8     # 连续认不出界面就放弃
 
 
@@ -85,11 +87,19 @@ GAME_CONFIG = GameConfig()
 # ============================================================
 # .env 加载（覆盖上面的默认值）
 # ============================================================
+def _find_env_file() -> str:
+    """定位 .env：打包环境找 exe 同目录（用户可自放覆盖配置），开发环境找项目根目录。"""
+    if getattr(sys, 'frozen', False):
+        return os.path.join(os.path.dirname(sys.executable), '.env')
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+
+
 def load_env():
-    """从 .env 文件加载配置，覆盖默认值。"""
+    """从 .env 文件加载配置，覆盖默认值。文件不存在时全部走代码内默认值。"""
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(dotenv_path=_find_env_file())
 
         # 窗口
         GAME_CONFIG.window_title_keyword = os.getenv(
