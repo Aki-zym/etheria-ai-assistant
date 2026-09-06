@@ -22,17 +22,25 @@ try:
 except ImportError:
     pass
 
+# P0A 版本可追溯：build_info.json 由 scripts/build_check.py 生成（版本/提交号/构建时间），
+# 打包前必经构建检查，故这里直接要求存在；缺失时中止以免打出不可追溯的产物。
+_build_info = os.path.join(SPECPATH, 'build_info.json')
+if not os.path.isfile(_build_info):
+    raise SystemExit('缺少 build_info.json —— 请先运行 python scripts/build_check.py')
+_datas = [
+    ('ui/static', 'ui/static'),
+    ('templates', 'templates'),
+    ('easyocr_models', 'easyocr_models'),
+    ('build_info.json', '.'),
+    # 不打包 .env：所有配置项有代码内默认值，用户可在 exe 旁自放 .env 覆盖
+    ('app.ico', '.'),
+]
+
 a = Analysis(
     ['ui/app.py'],
     pathex=[],
     binaries=binaries,
-    datas=[
-        ('ui/static', 'ui/static'),
-        ('templates', 'templates'),
-        ('easyocr_models', 'easyocr_models'),
-        # 不打包 .env：所有配置项有代码内默认值，用户可在 exe 旁自放 .env 覆盖
-        ('app.ico', '.'),
-    ],
+    datas=_datas,
     hiddenimports=[
         'webview',
         'webview.platforms.winforms',

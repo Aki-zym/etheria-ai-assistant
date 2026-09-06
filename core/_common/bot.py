@@ -2,6 +2,7 @@
 游戏机器人 - 高层任务编排
 组合所有 core 模块，提供统一的操作接口
 """
+import os
 import time
 import threading
 from typing import Optional, Callable
@@ -13,6 +14,7 @@ from core._base.capture import capture_game_screen, save_screenshot, save_templa
 from core._base.ocr import create_ocr_engine, find_text, PaddleOCREngine, EasyOCREngine
 from core._base.template_match import match_template, match_template_multi_scale, TemplateMatch
 from core._base.input import click_at, click_window, press_key, move_to, post_click
+from core._base import scene_pack
 from core._common.battle_common import tpl
 from core.config import DungeonConfig, GAME_CONFIG
 
@@ -32,6 +34,10 @@ class GameBot:
         self._ocr_type = ocr_engine or GAME_CONFIG.ocr_engine
         self._running = False
         self._log_callbacks: list[Callable[[str], None]] = []
+        # 失败现场包（P0A）：最后成功帧 + 最近动作，供 scene_pack 落盘标注
+        self.last_frame = None
+        self.last_action = None
+        scene_pack.register_bot(self)
 
     # ==================== 生命周期 ====================
 
@@ -63,7 +69,10 @@ class GameBot:
         """截取游戏画面"""
         if not self._game_window:
             return None
-        return capture_game_screen(self._game_window)
+        img = capture_game_screen(self._game_window)
+        if img is not None:
+            self.last_frame = img
+        return img
 
     def save_screenshot(self) -> Optional[str]:
         """截取并保存游戏画面，返回文件路径"""
@@ -134,6 +143,9 @@ class GameBot:
         abs_y = self._game_window.top + match.y
 
         self._log(f"点击图标位置: ({abs_x}, {abs_y})")
+        self.last_action = {
+            "desc": f"点击图标 {os.path.basename(template_path)}",
+            "x": match.x, "y": match.y}
         # 使用 PostMessage 直接向游戏窗口发送点击，鼠标不移动
         post_click(self._game_window.hwnd, abs_x, abs_y)
         return True
@@ -191,6 +203,8 @@ class GameBot:
         abs_y = self._game_window.top + position[1]
 
         self._log(f"点击文字 '{text}' 位置: ({abs_x}, {abs_y})")
+        self.last_action = {
+            "desc": f"点击文字 '{text}'", "x": position[0], "y": position[1]}
         click_at(abs_x, abs_y)
         return True
 
@@ -228,6 +242,9 @@ class GameBot:
             abs_x = self._game_window.left + match.x
             abs_y = self._game_window.top + match.y
             self._log(f"点击返回按钮 ({i+1}/{max_retries}) 位置: ({abs_x}, {abs_y})")
+            self.last_action = {
+                "desc": f"点击返回按钮 ({i+1}/{max_retries})",
+                "x": match.x, "y": match.y}
             post_click(self._game_window.hwnd, abs_x, abs_y)
             clicked = True
             time.sleep(0.8)
@@ -240,6 +257,7 @@ class GameBot:
     def press(self, key: str):
         """按键盘按键"""
         self._log(f"按下按键: {key}")
+        self.last_action = {"desc": f"按下按键 {key}", "x": None, "y": None}
         press_key(key)
 
     # ==================== 副本任务 ====================
@@ -324,6 +342,9 @@ class GameBot:
             self._log(f"副本 {config.name} 完成")
         except Exception as e:
             self._log(f"执行出错: {e}")
+            scene_pack.write_scene_pack(
+                task="dungeon", node=f"副本 {config.name}",
+                error=e, extra={"副本": dungeon_id, "次数": count})
         finally:
             self._running = False
 
@@ -345,6 +366,7 @@ class GameBot:
             print(line, flush=True)
         except UnicodeEncodeError:
             print(f"{ts} [Bot] {repr(message)}", flush=True)
+        scene_pack.record_log(line)
         for cb in self._log_callbacks:
             try:
                 cb(message)

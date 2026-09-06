@@ -521,6 +521,10 @@ class Api:
             import traceback
             traceback.print_exc()
             self._push_log(f"战斗流程异常: {e}")
+            from core._base import scene_pack
+            scene_pack.write_scene_pack(
+                task="zhike", node="UI 智壳入口", error=e, bot=self.bot,
+                extra={"角色": character_name, "难度": difficulty, "场次": streak})
             return False
 
     def run_yuanqi_battle(self, character_name: str, difficulty: str = '地狱四', streak: int = 1, double_stamina: bool = False) -> bool:
@@ -943,6 +947,10 @@ def _version_newer(a, b):
 
 def run():
     """启动桌面应用"""
+    # 失败现场包（P0A）：装全局兜底钩子，未捕获异常自动落盘 scene_packs/
+    from core._base import scene_pack
+    scene_pack.install()
+
     # 告诉 Windows：这不是普通 Python 进程，是独立应用（影响任务栏图标）
     import ctypes
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(

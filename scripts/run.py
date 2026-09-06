@@ -55,6 +55,10 @@ def _tpl_path(name: str) -> str:
 
 
 def main():
+    # 失败现场包（P0A）：装全局兜底钩子，未捕获异常自动落盘 scene_packs/
+    from core._base import scene_pack
+    scene_pack.install()
+
     argv = sys.argv[1:]
     if not argv:
         run_gui()

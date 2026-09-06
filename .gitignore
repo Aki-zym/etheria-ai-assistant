@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 venv/
 .venv/
+.pytest_cache/
 
 # 运行截图
 screenshots/
@@ -28,6 +29,9 @@ debug_screenshots/
 tmp/
 scene_packs/
 debug/
+
+# 构建检查生成的版本信息（每次构建刷新，不入库）
+build_info.json
 
 # 系统文件
 Thumbs.db

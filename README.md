@@ -4,6 +4,11 @@
 
 🔒 **纯模拟点击**：不修改游戏文件、不注入进程、不影响 PvP 公平。原理同 March7thAssistant。
 
+> ⚠️ **本仓库已冻结（2026-09-06，P0A）**：进入维护期，只修致命问题不加新功能。
+> 新功能一律开发于 `EtheriaMaa` 仓库（MaaFramework 引擎重写版），迁移路线见
+> `docs/Etheria升级总计划.md`。构建前会自动执行边界冻结检查
+> （`scripts/check_freeze.py`：core/ 只许变小不许变大）。
+
 ---
 
 ## 郑重声明

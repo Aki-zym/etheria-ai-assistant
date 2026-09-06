@@ -102,4 +102,12 @@ def run_task(bot, task_id: str, **kwargs) -> bool:
     import inspect
     sig = inspect.signature(fn)
     accepted = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    return fn(bot, **accepted)
+    try:
+        return fn(bot, **accepted)
+    except Exception as e:
+        # 失败现场包（P0A）：注册表是全部任务的统一出口，异常即落包再原样抛出
+        from core._base import scene_pack
+        scene_pack.write_scene_pack(
+            task=task_id, node=f"注册表任务 {task_id}",
+            error=e, bot=bot, extra={"参数": accepted})
+        raise

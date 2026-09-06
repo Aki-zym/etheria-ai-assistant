@@ -1,0 +1,8 @@
+{
+  "core_files": 27,
+  "core_lines": 6834,
+  "ui_files": 2,
+  "frontend_src_files": 26,
+  "_说明": "P0A 冻结基线。规则见 scripts/check_freeze.py：core/ 文件数与总行数只许变小；ui 与 frontend/src 文件数不许变大。仅在合规缩减后用 --update 重新锁定。",
+  "_生成": "2026-09-06 @ 882964d"
+}

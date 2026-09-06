@@ -21,12 +21,18 @@ def run(cmd, cwd=None, desc=""):
     print(f"\n[OK] {desc}")
 
 
-# Step 1: build frontend
-run("npm run build", cwd=os.path.join(ROOT, "frontend"), desc="[1/3] 构建前端")
+# Step 0: 构建前检查（P0A）：边界冻结 + PC 构建检查，任一失败即中止
+run(f'"{sys.executable}" scripts/check_freeze.py',
+    desc="[1/5] 边界冻结检查")
+run(f'"{sys.executable}" scripts/build_check.py',
+    desc="[2/5] PC 构建检查（版本可追溯 / 无模拟器依赖 / 资源完整）")
 
-# Step 2: PyInstaller
-run("python -m PyInstaller YiseAssistant.spec --noconfirm",
-    desc="[2/3] PyInstaller 打包 exe")
+# Step 1: build frontend
+run("npm run build", cwd=os.path.join(ROOT, "frontend"), desc="[3/5] 构建前端")
+
+# Step 2: PyInstaller（跟随当前解释器，不依赖终端是否激活了虚拟环境）
+run(f'"{sys.executable}" -m PyInstaller YiseAssistant.spec --noconfirm',
+    desc="[4/5] PyInstaller 打包 exe")
 
 # Step 3: zip dist
 dist_dir = os.path.join(ROOT, "dist", "瑞玛丽小助手")
@@ -34,7 +40,7 @@ zip_path = os.path.join(ROOT, "dist", f"瑞玛丽小助手_V{__version__}.zip")
 if os.path.exists(zip_path):
     os.remove(zip_path)
 print(f"\n{'='*50}")
-print(f"  [3/3] 压缩 dist 文件夹")
+print(f"  [5/5] 压缩 dist 文件夹")
 print(f"{'='*50}\n")
 shutil.make_archive(zip_path.replace(".zip", ""), "zip",
                     os.path.join(ROOT, "dist"), "瑞玛丽小助手")
