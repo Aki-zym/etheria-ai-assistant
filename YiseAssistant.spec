@@ -54,6 +54,9 @@ a = Analysis(
         'win32process',
         'win32api',
         'mss',
+        # WGC 后台捕获（windows-capture 2.0.1：纯 Python 包 + windows_capture.pyd，
+        # .pyd 依赖全为系统 DLL，随 hiddenimports 自动收集，无需额外 binaries）
+        'windows_capture',
         'pyautogui',
         'pynput',
         'easyocr',

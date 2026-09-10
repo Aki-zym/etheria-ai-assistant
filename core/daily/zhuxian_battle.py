@@ -1,7 +1,5 @@
 """
-主线推图模块
-
-按画面里出现的模板决定下一步，没有全局状态机。
+主线推图模块：按画面里出现的模板决定下一步，没有全局状态机。
 停止关可配（默认 4-7），后面章节改参数即可。
 """
 import os
@@ -12,18 +10,22 @@ import numpy as np
 
 from core._base.input import post_click
 from core._common.battle_common import (
-    tpl, wait_for_image, wait_for_image_gone, exit_battle,
-    _find_manual_button, _init_easyocr_reader, setup_preset,
-    find_all_by_color,
-)
+    tpl, wait_for_image, setup_preset, find_all_by_color)
 from core.config import GAME_CONFIG
 
 _BASE_DIR = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
 _ZHUXIAN_TPL = os.path.join(_BASE_DIR, 'templates', 'zhuxian')
 
-_ocr_stage = None
-_ocr_disabled = False
+# 弹窗标题 #X-Y 的 8×12 点阵（Segoe UI Bold），不依赖 paddlepaddle
+_STAGE_GLYPHS = {
+    '0': 0x3c7e77e7e7e7e7e7e7f77e3c, '1': 0xfffffff0f0f0f0f0f0f0f0f,
+    '2': 0x7cfecf07070e1e7870e0ffff, '3': 0x7c7e4f070e7c7e0f0787fffc,
+    '4': 0xe0e1e3e3e7e6effffff0e0e, '5': 0x7efee0e0f8feff07078ffefc,
+    '6': 0x1e3e70e0fcfff7e7e7e77e3c, '7': 0xffff070e0e1c1c1838383830,
+    '8': 0x3c7ee7e77e7c7ee7e7e7fe7c, '9': 0x3c7ee7e7e7ff7f37070efe78,
+    '#': 0x3636367fff366cfefe6c6c48,
+}
 
 
 def _ztpl(name: str) -> str:
@@ -62,7 +64,6 @@ def _find(bot, name, multi_scale=True, threshold=None, region=None):
     if screenshot is None:
         return None
     from core._base.template_match import match_template, match_template_multi_scale
-    from core.config import GAME_CONFIG
     threshold = threshold or GAME_CONFIG.template_threshold
     ox = oy = 0
     img = screenshot
@@ -82,17 +83,7 @@ def _find(bot, name, multi_scale=True, threshold=None, region=None):
 
 def _bottom_bar_region(bot):
     gw = bot.game_window
-    h = gw.height
-    w = gw.width
-    return (0, int(h * 0.82), w, h)
-
-
-def _find_any(bot, names, multi_scale=True):
-    for name in names:
-        pos = _find(bot, name, multi_scale=multi_scale)
-        if pos is not None:
-            return name, pos
-    return None, None
+    return (0, int(gw.height * 0.82), gw.width, gw.height)
 
 
 def _click(bot, pos):
@@ -103,88 +94,75 @@ def _click_blank(bot):
     """结算 / 章节完成页点画面中心空白返回，避开左下战斗统计。"""
     gw = bot.game_window
     x = gw.left + gw.width // 2
-    y = gw.top + int(gw.height * 0.72)
+    y = gw.top + int(gw.height * 0.91)
     bot._log(f'点击空白返回 ({x}, {y})')
     post_click(gw.hwnd, x, y)
     time.sleep(1.2)
 
 
+def _collapsed(bot) -> bool:
+    """系统陷落失败页。旧模板在 2024×1098 只有 ~0.60，会漏成未知界面。"""
+    return _find(bot, tpl('系统陷落.png')) is not None
+
+
 def _battle_ended(bot) -> bool:
-    """战斗结束：异常排除 / 获得物品 / 章节完成。静默查找，避免刷 miss。"""
+    """战斗结束：异常排除/获得物品/章节完成。默认 _find（0.82 单尺度真机会漏异常排除），静默查避免刷 miss。"""
     return (
-        _find(bot, '异常排除.png', multi_scale=False, threshold=0.82) is not None
-        or _find(bot, '点击空白返回.png', multi_scale=False, threshold=0.80) is not None
-        or _find(bot, '获得物品.png', multi_scale=False, threshold=0.82) is not None
-        or _find(bot, '章节完成.png', multi_scale=False, threshold=0.75) is not None
+        _find(bot, '异常排除.png') is not None
+        or _find(bot, '点击空白返回.png') is not None
+        or _find(bot, '获得物品.png', threshold=0.85) is not None
+        or _find(bot, '章节完成.png') is not None
     )
 
 
-def _get_ocr():
-    global _ocr_stage, _ocr_disabled
-    if _ocr_disabled:
-        return None
-    if _ocr_stage is None:
-        from core._base.ocr import create_ocr_engine
-        try:
-            _ocr_stage = create_ocr_engine('paddle')
-        except Exception:
-            try:
-                import sys as _sys
-                if getattr(_sys, 'frozen', False):
-                    _tl = os.path.join(_sys._MEIPASS, 'torch', 'lib')
-                    if os.path.isdir(_tl):
-                        os.add_dll_directory(_tl)
-                _ocr_stage = _init_easyocr_reader(['en'])
-            except Exception:
-                _ocr_disabled = True
-                return None
-    return _ocr_stage
-
-
-def _ocr_texts(engine, image):
-    """Paddle/EasyOCR 统一抽文字。"""
-    texts = []
-    if hasattr(engine, 'recognize'):
-        for m in engine.recognize(image):
-            texts.append(m.text)
-        return texts
-    import numpy as np
-    for det in engine.readtext(np.array(image), allowlist='0123456789-—#'):
-        texts.append(det[1])
-    return texts
-
-
 def _ocr_current_stage(bot):
-    """从关卡弹窗左侧 OCR #X-Y。引擎不可用则整场禁用，不再每关重试。"""
-    global _ocr_disabled
-    if _ocr_disabled:
-        return None
-    from PIL import Image as _Image
+    """弹窗左侧标题 #X-Y：8×12 点阵匹配，不依赖 paddlepaddle。"""
     img = bot.capture()
     if img is None:
         return None
-    engine = _get_ocr()
-    if engine is None:
-        bot._log('OCR 不可用（未装 paddlepaddle/easyocr），停止关只按结算推进')
-        _ocr_disabled = True
-        return None
+    import cv2
     w, h = img.size
-    roi = img.crop((int(w * 0.08), int(h * 0.22), int(w * 0.42), int(h * 0.48)))
-    roi2 = roi.resize((roi.width * 2, roi.height * 2), _Image.LANCZOS)
-    texts = []
-    try:
-        texts.extend(_ocr_texts(engine, roi2))
-        if not texts:
-            texts.extend(_ocr_texts(engine, roi))
-    except Exception as e:
-        bot._log(f'OCR 不可用，本场不再尝试: {e}')
-        _ocr_disabled = True
+    gray = cv2.cvtColor(np.array(img.crop(
+        (int(w * 0.08), int(h * 0.22), int(w * 0.42), int(h * 0.48)))), cv2.COLOR_RGB2GRAY)
+    # WGC 有时比人眼暗（标题最高约 170），固定 180 会把字滤掉
+    _, th = cv2.threshold(gray, max(130, min(180, int(gray.max() * 0.82))), 255, cv2.THRESH_BINARY)
+    n, _, st, _ = cv2.connectedComponentsWithStats(th, 8)
+    glyphs = {c: np.array([(v >> (95 - i)) & 1 for i in range(96)], np.uint8).reshape(12, 8)
+              for c, v in _STAGE_GLYPHS.items()}
+    items = []
+    for i in range(1, n):
+        x, y, bw, bh, area = st[i]
+        if bh < 18 or bh > 80 or area < 40 or bw > 50 or y > gray.shape[0] * 0.65:
+            continue
+        b = cv2.resize(th[y:y + bh, x:x + bw], (8, 12), interpolation=cv2.INTER_AREA)
+        b = (b > 80).astype(np.uint8)
+        best, who = 29, None
+        for ch, g in glyphs.items():
+            d = int(np.count_nonzero(b != g))
+            if d < best:
+                best, who = d, ch
+        if who:
+            items.append((int(x), who, int(x + bw)))
+    digits = [t for t in sorted(items) if t[1] != '#']
+    if len(digits) < 2:
         return None
-    joined = ' '.join(texts)
-    stage = _parse_stage(joined)
-    if stage:
-        bot._log(f'OCR 关卡: #{stage[0]}-{stage[1]}  原文={texts[:6]}')
+    if len(digits) == 2:
+        stage = (int(digits[0][1]), int(digits[1][1]))
+    else:
+        cut = max(range(1, len(digits)), key=lambda i: digits[i][0] - digits[i - 1][2])
+        stage = (int(''.join(t[1] for t in digits[:cut])),
+                 int(''.join(t[1] for t in digits[cut:])))
+    bot._log(f'OCR 关卡: #{stage[0]}-{stage[1]}')
     return stage
+
+
+def _read_stage(bot):
+    """OCR 当前关（#X-Y）；OCR 不可用/异常时 None。"""
+    try:
+        return _ocr_current_stage(bot)
+    except Exception as e:
+        bot._log(f'OCR 跳过: {e}')
+        return None
 
 
 def _use_stamina_potion(bot) -> bool:
@@ -192,8 +170,8 @@ def _use_stamina_potion(bot) -> bool:
     bot._log('体力不足 → 自动使用体力药兑换...')
     potion_tpl = tpl('体力兑换药.png')
     if not os.path.exists(potion_tpl):
-        bot._log('[WARN] 缺少模板 templates/richang/体力兑换药.png（体力兑换弹窗里的体力药图标）')
-        bot._log('[WARN] 可用界面「截模板」功能截取该图标，或在主线面板关闭「体力不足自动用药」')
+        bot._log('[WARN] 缺少模板 templates/richang/体力兑换药.png（体力兑换弹窗里的体力药图标），'
+                 '可用界面「截模板」截取，或在主线面板关闭「体力不足自动用药」')
         return False
     pos = wait_for_image(bot, potion_tpl, timeout=5)
     if pos is None:
@@ -243,8 +221,7 @@ def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) 
         return False
     bot._log('点击战斗...')
     _click(bot, fight)
-    # 点完战斗直接进入扫描模式：正常流程不弹「确定」，只有体力不足才弹
-    # 体力兑换弹窗，由下方循环内的体力检测处理，省掉每次战斗固定 4-6s 空等
+    # 点完战斗直接扫描：只有体力不足才弹体力弹窗，由循环内体力检测处理
     time.sleep(2)
 
     timeout = GAME_CONFIG.battle_end_timeout
@@ -254,9 +231,7 @@ def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) 
     while time.time() < deadline:
         if not bot.is_running:
             return False
-        # 战斗失败画面：必须先于通用结束标志判断——失败页底部的
-        # 「点击空白处返回」和胜利页同名提示会混淆，这里优先分流
-        if _find(bot, tpl('系统陷落.png')) is not None:
+        if _collapsed(bot):
             bot._log('[WARN] 系统陷落：战斗失败')
             _click_blank(bot)
             return 'failed'
@@ -287,6 +262,45 @@ def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) 
     return True
 
 
+def _wait_battle_entry(bot):
+    """点前往挑战后有 Scripts Loading，最多等 25s 直到出现战斗/跳过/结算。"""
+    deadline = time.time() + 25
+    while time.time() < deadline and bot.is_running:
+        time.sleep(1.2)
+        if (_find(bot, '主线战斗.png') is not None
+                or _find(bot, '主线跳过.png') is not None
+                or _find(bot, '异常排除.png') is not None
+                or bot.find_image(tpl('F战斗.png')) is not None):
+            break
+
+
+def _map_new_marker(bot):
+    """地图 NEW：先模板（960 下经常 miss），失败用黄色色块兜底。色块只在地图
+    ROI 内认——排除标题栏、底栏聊天、子关弹窗金色图标——取最靠中线的（主进度），
+    不能把任意黄色轮廓当主线进度。"""
+    marker = _find(bot, '主线NEW.png')
+    if marker is not None:
+        return marker
+    gw = bot.game_window
+    yellows = [p for p in find_all_by_color(bot, target_rgb=(255, 214, 40), tolerance=45)
+               if gw.top + 40 < p[1] < gw.top + int(gw.height * 0.82)
+               and not (p[0] > gw.left + gw.width * 0.72
+                        and p[1] < gw.top + gw.height * 0.42)]
+    if not yellows:
+        return None
+    mid_x = gw.left + gw.width // 2
+    yellows.sort(key=lambda p: abs(p[0] - mid_x))
+    bot._log(f'黄色 NEW 色块 {yellows[0]}')
+    return yellows[0]
+
+
+def _near_lock(bot, marker):
+    """NEW 位置邻近锁定图标则不可点。"""
+    lock = _find(bot, '主线锁定.png')
+    return (lock is not None and abs(lock[0] - marker[0]) < 80
+            and abs(lock[1] - marker[1]) < 80)
+
+
 def _on_chapter_select(bot) -> bool:
     """章节选择页：CHAPTER / 普通模式。章节名也会出现在关卡地图里，不能单独当信号。"""
     return (
@@ -299,15 +313,13 @@ def _already_in_story_flow(bot) -> bool:
     """关卡地图 / 关卡弹窗 / 战斗 / 结算 / 剧情，都不必再从主界面进。"""
     if _on_chapter_select(bot):
         return False
-    checks = [
-        '主线前往挑战.png', '主线战斗.png',
-        '异常排除.png', '获得物品.png', '主线跳过.png',
-        '章节完成.png',
-    ]
+    checks = ('主线前往挑战.png', '主线战斗.png', '异常排除.png',
+              '获得物品.png', '主线跳过.png', '章节完成.png')
     for name in checks:
         if _find(bot, name) is not None:
             return True
-    if _find(bot, '主线NEW.png') is not None:
+    marker = _map_new_marker(bot)
+    if marker is not None and not _near_lock(bot, marker):
         return True
     if bot.find_image(tpl('F战斗.png')) is not None:
         return True
@@ -379,11 +391,7 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                        streak: int = 1, stop_stage: str = None,
                        from_home: bool = None,
                        use_stamina_potion: bool = None) -> bool:
-    """
-    自动推主线。stop_stage 默认 4-7，打完该关后的获得物品即停。
-    use_stamina_potion: 体力不足时自动用体力药兑换（默认读 GAME_CONFIG）。
-    """
-    hwnd = bot.game_window.hwnd
+    """自动推主线。stop_stage 默认 4-7，打完该关后的结算即停；体力药开关读 GAME_CONFIG。"""
     bot._running = True
     stop_stage = stop_stage or GAME_CONFIG.zhuxian_stop_stage or character_name or '4-7'
     if from_home is None:
@@ -411,8 +419,19 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
         last_stage = None
         fighting_stage = None
         loot_seen_for_stop = False
+        new_miss = 0
 
         while bot.is_running:
+            if _collapsed(bot):
+                bot._log('[WARN] 系统陷落：战斗失败')
+                _click_blank(bot)
+                fail_count += 1
+                bot._log(f'战斗失败 {fail_count}/3')
+                if fail_count >= 3:
+                    bot._log('[FAIL] 连续 3 次战斗失败（系统陷落），停止主线')
+                    return False
+                stale = 0
+                continue
             if bot.find_image(tpl('体力兑换.png')) is not None:
                 if not use_stamina_potion:
                     bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线')
@@ -425,18 +444,14 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
             # 1. 剧情跳过（无确认）— 只在右上角找，避免和地图 UI 串
             gw = bot.game_window
             skip_region = (int(gw.width * 0.70), 0, gw.width, int(gw.height * 0.22))
-            skip = None
-            for skip_name in ('主线跳过.png',):
-                skip = _find(bot, skip_name, region=skip_region, threshold=0.80, multi_scale=False)
-                if skip is not None:
-                    break
+            skip = _find(bot, '主线跳过.png', region=skip_region)
             if skip is not None:
                 bot._log('点击跳过')
                 _click(bot, skip)
                 time.sleep(1.2)
                 stale = 0
                 continue
-            auto = _find(bot, '主线剧情自动.png', region=skip_region, threshold=0.80, multi_scale=False)
+            auto = _find(bot, '主线剧情自动.png', region=skip_region)
             if auto is not None:
                 bot._log('剧情页：Esc 跳过')
                 from core._base.window import focus_window
@@ -449,40 +464,32 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 stale = 0
                 continue
 
-            # 2. 三关掉落
-            loot = _find(bot, '获得物品.png', multi_scale=False, threshold=0.82)
-            if loot is None:
-                loot = _abs_pos(bot, bot.find_image(
-                    os.path.join(_BASE_DIR, 'templates', 'shilian', '获得物品.png'),
-                    threshold=0.82, multi_scale=False))
+            # 2. 三关掉落（只认主线模板；试炼模板/低阈值会把剧情页当掉落）
+            loot = _find(bot, '获得物品.png', threshold=0.85)
             if loot is not None:
                 bot._log('获得物品 → 点空白返回')
                 if fighting_stage and _stage_ge(fighting_stage, stop):
                     loot_seen_for_stop = True
                 _click_blank(bot)
                 if loot_seen_for_stop:
+                    for _ in range(3):
+                        if not _battle_ended(bot):
+                            break
+                        _click_blank(bot)
                     bot._log(f'[OK] 已打完停止关 #{stop[0]}-{stop[1]}')
                     return True
                 fail_count = 0  # 胜利后清空连败计数
                 stale = 0
                 continue
 
-            # 3. 战斗结算 / 章节完成（最后一关通关）
-            chapter_done = _find(bot, '章节完成.png', multi_scale=False, threshold=0.75)
-            end = _find(bot, '异常排除.png', multi_scale=False, threshold=0.82)
+            # 3. 战斗结算 / 章节完成条。章节完成只是过场，不等于整关打完；停关看掉落或下一关号
+            chapter_done = _find(bot, '章节完成.png', threshold=0.85)
+            end = _find(bot, '异常排除.png')
             if end is None:
-                end = _find(bot, '点击空白返回.png', multi_scale=False, threshold=0.80)
+                end = _find(bot, '点击空白返回.png')
             if chapter_done is not None or end is not None:
-                if chapter_done is not None:
-                    bot._log('章节完成 → 点空白继续')
-                    if fighting_stage and _stage_ge(fighting_stage, stop):
-                        loot_seen_for_stop = True
-                else:
-                    bot._log('异常排除 → 点空白返回')
+                bot._log('章节完成 → 点空白继续' if chapter_done else '异常排除 → 点空白返回')
                 _click_blank(bot)
-                if loot_seen_for_stop:
-                    bot._log(f'[OK] 已打完停止关 #{stop[0]}-{stop[1]}')
-                    return True
                 fail_count = 0
                 stale = 0
                 continue
@@ -507,11 +514,7 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
             # 5. 前往挑战
             go = _find(bot, '主线前往挑战.png')
             if go is not None:
-                try:
-                    stage = _ocr_current_stage(bot)
-                except Exception as e:
-                    bot._log(f'OCR 跳过: {e}')
-                    stage = None
+                stage = _read_stage(bot)
                 if stage is not None:
                     last_stage = stage
                     if _stage_gt(stage, stop):
@@ -520,23 +523,20 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 fighting_stage = stage or last_stage
                 bot._log('点击前往挑战')
                 _click(bot, go)
-                # 进战斗有 Scripts Loading，最多等 25s 直到出现战斗/跳过/结算
-                deadline = time.time() + 25
-                while time.time() < deadline and bot.is_running:
-                    time.sleep(1.2)
-                    if (_find(bot, '主线战斗.png') is not None
-                            or _find(bot, '主线跳过.png') is not None
-                            or _find(bot, '异常排除.png') is not None
-                            or bot.find_image(tpl('F战斗.png')) is not None):
-                        break
+                _wait_battle_entry(bot)
                 stale = 0
                 continue
 
-            # 5.5 关卡选择弹窗（点地图 NEW 节点后弹出的子关列表，如 #8-8 → #08-01~05）：
-            # 弹窗底部「敌方情报」的金色图标也是黄色且更靠中线，会污染通用 NEW
-            # 色块逻辑（点小怪无效果 → stale 被清零 → 永久循环），必须提前精确处理
+            # 5.5 关卡选择弹窗：底部「敌方情报」金色图标也是黄色且更靠中线，
+            # 会污染通用 NEW 色块逻辑（点小怪无效果 → 永久循环），必须提前精确处理
             popup_go = _find(bot, '关卡弹窗前往挑战.png', threshold=0.80)
             if popup_go is not None:
+                stage = _read_stage(bot)
+                if stage is not None:
+                    last_stage = stage
+                    if _stage_gt(stage, stop):
+                        bot._log(f'当前 #{stage[0]}-{stage[1]} 已超过停止关，结束')
+                        return True
                 badge = _find(bot, '关卡弹窗NEW.png', threshold=0.72)
                 if badge is None:
                     # 模板兜底：只在弹窗右侧子关列表区域内找黄色点
@@ -557,42 +557,40 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                     bot._log('[WARN] 关卡弹窗内无 NEW 子关，点空白关闭弹窗')
                     _click_blank(bot)
                     continue
+                fighting_stage = stage or last_stage
                 bot._log('关卡弹窗：点击前往挑战')
                 _click(bot, popup_go)
-                # 进战斗有加载，最多等 25s 直到出现战斗/跳过/结算
-                deadline = time.time() + 25
-                while time.time() < deadline and bot.is_running:
-                    time.sleep(1.2)
-                    if (_find(bot, '主线战斗.png') is not None
-                            or _find(bot, '主线跳过.png') is not None
-                            or _find(bot, '异常排除.png') is not None
-                            or bot.find_image(tpl('F战斗.png')) is not None):
-                        break
+                _wait_battle_entry(bot)
                 stale = 0
                 continue
 
-            # 6. 当前进度 NEW：先模板，失败则按黄色色块找（960 下模板经常 miss）
-            marker = _find(bot, '主线NEW.png')
-            if marker is None:
-                yellows = find_all_by_color(bot, target_rgb=(255, 214, 40), tolerance=45)
-                # 丢掉标题栏 / 底栏聊天
-                gw = bot.game_window
-                yellows = [p for p in yellows
-                           if gw.top + 40 < p[1] < gw.top + gw.height - 80]
-                if yellows:
-                    # 偏地图中线的那个（主进度），不要最边上的支线
-                    mid_x = gw.left + gw.width // 2
-                    yellows.sort(key=lambda p: abs(p[0] - mid_x))
-                    marker = yellows[0]
-                    bot._log(f'黄色 NEW 色块 {marker}')
+            # 6. 当前进度 NEW（模板 miss 时的黄色色块兜底见 _map_new_marker）
+            marker = _map_new_marker(bot)
             if marker is not None:
-                lock = _find(bot, '主线锁定.png')
-                if lock is not None and abs(lock[0] - marker[0]) < 80 and abs(lock[1] - marker[1]) < 80:
+                if _near_lock(bot, marker):
                     bot._log('[WARN] NEW 附近有锁，跳过该点')
                 else:
-                    bot._log('点击 NEW 节点')
-                    _click(bot, marker)
+                    # 时间轴上胶片压红线，点下去会拖地图，改点角标（密会已验证可开）；
+                    # 轴下剧情卡点胶片播放三角。
+                    line_y = gw.top + int(gw.height * 531 / 1098)
+                    if abs(marker[1] - line_y) < 40:
+                        face = marker
+                    else:
+                        face = (marker[0] - int(gw.width * 45 / 2024),
+                                marker[1] + int(gw.height * 40 / 1098))
+                    bot._log(f'点击 NEW 卡面 {face}')
+                    _click(bot, face)
                     time.sleep(1.8)
+                    opened = (_find(bot, '主线跳过.png') or _find(bot, '主线剧情自动.png')
+                              or _find(bot, '关卡弹窗前往挑战.png', threshold=0.80)
+                              or _find(bot, '获得物品.png', threshold=0.85))
+                    if opened:
+                        new_miss = 0
+                    else:
+                        new_miss += 1
+                        if new_miss >= 3:
+                            bot._log('[FAIL] 地图 NEW 连点 3 次未进关/剧情，停止')
+                            return False
                 stale = 0
                 continue
 

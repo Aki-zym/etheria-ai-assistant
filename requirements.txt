@@ -16,11 +16,14 @@ paddleocr>=2.7.0
 # EasyOCR（更轻量，注释掉上面安装这个）
 # easyocr>=1.7.0
 
-# 游戏截图（可选但推荐）
-# dxcam  # 需要编译，Windows 下可能有问题
+# 游戏截图（可选回落路，WGC 不可用时才走到；pip 已有轮子，不强制打进包）
+# dxcam
 
 # WGC 后台窗口捕获（最优先截图路，窗口被遮挡时也能出帧；Win10 1903+）
 windows-capture>=2.0.0
+
+# 测试（scripts/test.py 统一入口）
+pytest>=8.0.0
 
 # 打包
 pyinstaller>=6.0.0

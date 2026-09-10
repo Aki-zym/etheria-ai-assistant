@@ -204,10 +204,12 @@ def get_position() -> Tuple[int, int]:
 
 def post_click(hwnd: int, screen_x: int, screen_y: int):
     """
-    后台点击：PostMessage 异步投递鼠标事件到 Unity 子窗口的消息队列。
+    后台点击：PostMessage 异步投递鼠标事件到游戏窗口（伊瑟为 UnrealWindow）的消息队列。
 
     PostMessage 不阻塞，消息排队后游戏在每帧的 PeekMessage 循环中顺序处理，
-    比 SendMessage（同步 inline 处理）更可靠。
+    比 SendMessage（同步 inline 处理）更可靠。真机已验证：伊瑟窗口失焦/被遮挡时
+    UMG 按钮与卡面均可后台点击成功，全程不抢前台；键盘按键与拖动仍走 SendInput
+    前台路（post_key/post_drag 语义不变）。
 
     Args:
         hwnd: 游戏顶层窗口句柄
@@ -229,17 +231,6 @@ def post_click(hwnd: int, screen_x: int, screen_y: int):
         return
 
     lparam = win32api.MAKELONG(cx, cy)
-
-    # 窗口被遮挡时 Unity 可能忽略 PostMessage 鼠标事件。
-    # 960×540 小窗口在角落，短暂提到前台用户无感知。
-    fg = win32gui.GetForegroundWindow()
-    if fg != hwnd and fg != target:
-        try:
-            import ctypes
-            ctypes.windll.user32.SetForegroundWindow(target)
-        except Exception:
-            pass
-        time.sleep(0.02)
 
     try:
         # 全部用 PostMessage（异步队列），游戏每帧按序处理
@@ -282,8 +273,9 @@ def post_scroll(hwnd: int, clicks: int):
 
 def _find_unity_child(hwnd: int) -> int:
     """
-    查找 Unity 游戏的实际渲染子窗口。
-    Unity 的输入处理通常在 UnityWndClass 子窗口上。
+    查找实际接收鼠标消息的窗口。
+    伊瑟为 UnrealWindow：顶层窗口自身收 PostMessage 即可；Unity 等其它引擎
+    通常在 UnityWndClass 子窗口上处理输入，故保留子窗口探测。
     """
     import win32gui
 

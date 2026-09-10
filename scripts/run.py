@@ -3,7 +3,8 @@
 
     python scripts/run.py                  桌面 GUI
     python scripts/run.py --list           列出可跑任务
-    python scripts/run.py --capture        截图
+    python scripts/run.py --capture        截图（打印实际使用的截图后端）
+    python scripts/run.py --backend        截图链路诊断：WGC 可用性 / 上次后端 / 窗口 class
     python scripts/run.py --find ICON      找模板（templates/ 相对路径）
     python scripts/run.py --click ICON     找并点击
     python scripts/run.py --resize [WxH]   缩放游戏窗到左上角，默认 960x540
@@ -54,6 +55,22 @@ def _tpl_path(name: str) -> str:
     return path
 
 
+def _last_backend():
+    """读 capture 模块的 last_backend（P0A 契约：'wgc'|'printwindow'|'dxcam'|
+    'bitblt'|'mss'|'mss-focus'|None，capture_game_screen 成功后赋值）。
+
+    capture.py 尚未升级（无此变量/模块不可导入）时返回 (None, False)，
+    调用方打一行提示即可，不崩。
+    """
+    try:
+        from core._base import capture as _capture_mod
+    except Exception:
+        return None, False
+    if not hasattr(_capture_mod, 'last_backend'):
+        return None, False
+    return _capture_mod.last_backend, True
+
+
 def main():
     # 失败现场包（P0A）：装全局兜底钩子，未捕获异常自动落盘 scene_packs/
     from core._base import scene_pack
@@ -68,6 +85,8 @@ def main():
     parser.add_argument('--cli', action='store_true')
     parser.add_argument('--list', action='store_true', help='列出任务')
     parser.add_argument('--capture', action='store_true')
+    parser.add_argument('--backend', action='store_true',
+                        help='截图链路诊断：WGC 可用性 / 上次后端 / 窗口 class')
     parser.add_argument('--find', metavar='ICON')
     parser.add_argument('--click', metavar='ICON')
     parser.add_argument('--resize', nargs='?', const='960x540', metavar='WxH')
@@ -94,6 +113,9 @@ def main():
         return
     if args.capture:
         run_capture()
+        return
+    if args.backend:
+        run_backend_info()
         return
     if args.find:
         run_find(args.find)
@@ -132,8 +154,47 @@ def run_capture():
     if not bot:
         return
     path = bot.save_screenshot()
-    if path:
+    if not path:
+        return
+    backend, ok = _last_backend()
+    if ok:
+        print(f"截图已保存: {path}  (backend: {backend})")
+    else:
         print(f"截图已保存: {path}")
+        print("提示: capture 模块暂无 last_backend（capture.py 未升级），本次后端未知")
+
+
+def run_backend_info():
+    """截图链路诊断：WGC 可导入性 / 上次截图后端 / 游戏窗口 class（只读，不截图）。"""
+    try:
+        import windows_capture  # noqa: F401
+        try:
+            from importlib.metadata import version
+            ver = version('windows-capture')
+        except Exception:
+            ver = '?'
+        print(f"WGC  windows-capture: 可导入 (版本 {ver})")
+    except Exception as e:
+        print(f"WGC  windows-capture: 不可导入 ({e})")
+
+    backend, ok = _last_backend()
+    if ok:
+        print(f"上次截图后端 last_backend: {backend}")
+    else:
+        print("上次截图后端: capture 模块暂无 last_backend（capture.py 未升级）")
+
+    bot = _bot()
+    if not bot:
+        print("游戏窗口: 未找到")
+        return
+    gw = bot.game_window
+    try:
+        import win32gui
+        cls = win32gui.GetClassName(gw.hwnd)
+    except Exception:
+        cls = '?'
+    print(f"游戏窗口: {gw.width}x{gw.height} @ ({gw.left},{gw.top}) "
+          f"hwnd={gw.hwnd} class={cls}")
 
 
 def run_find(template_name: str = None):

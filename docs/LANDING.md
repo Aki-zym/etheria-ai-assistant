@@ -60,26 +60,35 @@ GameBot (core/_common/bot.py)      统一操作接口：截图/找图/找字/点
 
 ## 2. 感知层：程序如何"看见"游戏
 
-### 2.1 五路截图降级链 — `capture.py: capture_game_screen`
+### 2.1 截图降级链 — `capture.py: capture_game_screen`
 
 ```
-WGC (Windows.Graphics.Capture)      ← 最优先：DWM 合成层，窗口被完全遮挡也能出帧（需 windows-capture 包）
+WGC (Windows.Graphics.Capture)      ← 实装主路：DWM 合成层，窗口被完全遮挡也能出帧
    ↓ 失败/帧过期(如最小化，>2s 无新帧)
-PrintWindow(PW_RENDERFULLCONTENT)   ← 非 Unreal 窗口：直接从 DWM 拿窗口内容
-   ↓ 失败/黑帧
-DXCam
+PrintWindow(PW_RENDERFULLCONTENT)   ← 仅非 Unreal 窗口（Unreal 客户端直接跳过）
+DXCam                               ← 可选轮子，未安装自动跳过
+BitBlt                              ← 仅非 Unreal 窗口（Unreal 客户端直接跳过）
    ↓
-BitBlt                              ← 非 Unreal；窗口可被遮挡但需可见
-   ↓
-MSS 前台截图（自动抢焦点，会短暂打扰用户）
+MSS 前台截图（必要时自动抢焦点，会短暂打扰用户）
 ```
 
-WGC 会话常驻（识别时只取最新帧 ~40ms），窗口句柄/尺寸变化自动重建；
-伊瑟是 UnrealWindow（PrintWindow/BitBlt 拿到黑帧/脏缓冲会被跳过），
-实际主路 = **WGC → MSS**。窗口最小化时游戏停止渲染，WGC 帧过期自动回落
+**WGC 是已实装的优先路，不是「未安装就跳过」的占位**：`windows-capture` 是
+requirements.txt 必装依赖（打包已收录）。会话常驻（识别时只取最新帧 ~40ms），
+窗口句柄/尺寸变化自动重建；窗口被遮挡、不在前台都能持续出帧。
+窗口最小化时游戏停止渲染，帧过期（>2s 无新帧）自动回落下一路
 （如需纯后台，把窗口移出屏幕外保持还原状态即可）。
 
+伊瑟客户端是 UnrealWindow：PrintWindow 拿到黑帧、BitBlt 拿到过期 GDI 残影，
+两者（连同 DXCam）在 Unreal 上直接跳过，实际主路 = **WGC → MSS**
+（MSS 走桌面合成，窗口没被挡住时无需抢焦点）。
+
 - 每张截图做**黑帧检测**（`is_black_image`，均值 < 10 判为后台截图失败，自动跳下一路）。
+- **`capture.last_backend`**（模块级变量）：`capture_game_screen` 每次成功后记录实际后端
+  （`wgc` / `printwindow` / `dxcam` / `bitblt` / `mss` / `mss-focus`）。
+  CLI `--capture` 随截图路径一起打印；`--backend` 可单独查看链路状态
+  （WGC 可导入性 / 上次后端 / 游戏窗口 class）。
+- **截图链与点击链相互独立**：上图的「抢焦点」只用于截图回落（MSS 需窗口可见），
+  `post_click` 点击走 PostMessage 全后台、不抢前台（见第 5 节）。
 - 超时兜底：`wait_for_image` 超时后会新建 MSS 实例强制截一张"新鲜帧"，绕过 DXGI 缓存/脏帧问题。
 
 ### 2.2 状态识别的三把尺子
@@ -87,7 +96,7 @@ WGC 会话常驻（识别时只取最新帧 ~40ms），窗口句柄/尺寸变化
 | 工具 | 用途 | 关键参数 |
 |---|---|---|
 | **模板匹配** `template_match.py` | 识别图标/按钮 | `TM_CCOEFF_NORMED`，**15 尺度 0.5x–2.67x** 适应任意分辨率；默认阈值 0.75。固定尺寸按钮（如"返回"）关多尺度、单尺度阈值提到 0.82 防误判 |
-| **OCR** `ocr.py` | 识别文字 | 双引擎（Paddle / EasyOCR）；小字三重增强：**CLAHE 对比度 + 2x 立方放大 + 多轮识别拼接兜底**；数字识别 `allowlist='0123456789'` 强约束 |
+| **OCR** `ocr.py` | 识别文字 | 双引擎（Paddle / EasyOCR）；小字三重增强：**CLAHE 对比度 + 2x 立方放大 + 多轮识别拼接兜底**；数字识别 `allowlist='0123456789'` 强约束。主线停关读弹窗 `#X-Y` 用 8×12 点阵，不依赖 paddlepaddle |
 | **颜色检测** `battle_common.find_all_by_color` | 识别红点标记 | `cv2.inRange` 按色号筛 → 找轮廓 → 面积 ≥3 过滤 → 10px 去重 → 按 Y 排序 |
 
 模板路径辅助：`tpl()` 拼 `templates/richang/`，`_stpl()` 拼 `templates/shilian/`，`_rtpl()` 拼 `templates/rta/`。中文路径统一用 `_imread`（open + imdecode），因为 `cv2.imread` 在 Windows 下不支持中文。
@@ -185,7 +194,7 @@ while 未停止:
 
 | 方式 | 原理 | 用途 | 代价 |
 |---|---|---|---|
-| `post_click` | PostMessage 直接投 WM_MOUSEMOVE/LBUTTONDOWN/UP 到 **UnityWndClass 子窗口**的消息队列 | 99% 的 UI 点击 | 零干扰、后台可点、鼠标不动；被遮挡时 Unity 可能忽略（所以有"短暂提到前台"的补丁） |
+| `post_click` | PostMessage 直接投 WM_MOUSEMOVE/LBUTTONDOWN/UP 到游戏窗口的消息队列（伊瑟为 **UnrealWindow**，顶层窗口自身收消息） | 99% 的 UI 点击 | 零干扰、后台可点、鼠标不动；真机已验证 UMG 按钮与卡面在失焦/被遮挡时可后台点击，全程不抢前台（旧"短暂提到前台"补丁已删） |
 | `post_drag` / `scroll` | SendInput + `lock_input` 锁 | 列表滚动、拖地图 | 需抢焦点 ~200ms，期间 BlockInput 锁用户 |
 | `pyautogui.keyDown/press` | 前台键盘 | 3D 行走（W）、Tab/F | 必须真焦点 + `lock_input` 包裹 |
 

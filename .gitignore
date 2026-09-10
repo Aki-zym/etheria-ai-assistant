@@ -9,6 +9,12 @@ venv/
 
 # 运行截图
 screenshots/
+templates/**/_dbg_*.png
+templates/**/_live_*.png
+templates/**/_cmp_*.png
+templates/**/_dpi_*.png
+templates/**/_pw_*.png
+templates/**/_preview.png
 *.egg-info/
 
 # PyInstaller
