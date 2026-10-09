@@ -195,34 +195,56 @@ def _use_stamina_potion(bot) -> bool:
     return False
 
 
-def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) -> bool:
+def _handle_out_of_stamina(bot, use_stamina_potion):
+    """体力弹窗。返回 True=已处理继续，False=停止，None=没有弹窗。"""
+    stable = _find(bot, '兑换稳定值.png', multi_scale=False)
+    if stable is not None:
+        if not use_stamina_potion:
+            bot._log('[WARN] 稳定值不足，未开启自动兑换，停止主线')
+            return False
+        bot._log('稳定值不足，点击兑换稳定值')
+        _click(bot, stable)
+        time.sleep(1.2)
+        if _find(bot, '兑换稳定值.png', multi_scale=False) is not None:
+            bot._log('[FAIL] 兑换稳定值弹窗还在')
+            return False
+        bot._log('[OK] 已兑换稳定值')
+        return True
+    if _find(bot, tpl('体力兑换.png'), multi_scale=False) is not None:
+        if not use_stamina_potion:
+            bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线')
+            return False
+        return True if _use_stamina_potion(bot) else False
+    return None
+
+
+def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False,
+                       already_started: bool = False) -> bool:
     """进战斗后等待结束。返回 True=正常结束 / False=需中止 / 'failed'=战斗失败（已点空白返回）。"""
     hwnd = bot.game_window.hwnd
-    time.sleep(1.0)
-    bot._log('检查手动模式...')
-    # 只模板匹配，不走 EasyOCR（本环境没装，会空等 3×几秒）
-    match = bot.find_image(tpl('手动.png'), multi_scale=False)
-    if match is not None:
-        manual_pos = (bot.game_window.left + match.x, bot.game_window.top + match.y)
-        _click(bot, manual_pos)
-        time.sleep(0.4)
-    else:
-        bot._log('未检测到手动按钮')
+    if not already_started:
+        # 前往挑战之后开战按钮已经在画面上，不再先空等 1 秒。
+        # 用 _find：bot.find_image 每次没对上都会打「未找到匹配图标」。
+        bot._log('检查手动模式...')
+        manual = _find(bot, tpl('手动.png'), multi_scale=False)
+        if manual is not None:
+            _click(bot, manual)
+            time.sleep(0.4)
+        else:
+            bot._log('未检测到手动按钮')
 
-    if use_preset:
-        if not setup_preset(bot):
-            bot._log('[WARN] 预设失败，继续用场上队伍')
+        if use_preset:
+            if not setup_preset(bot):
+                bot._log('[WARN] 预设失败，继续用场上队伍')
 
-    fight = wait_for_image(bot, _ztpl('主线战斗.png'), timeout=8)
-    if fight is None:
-        fight = wait_for_image(bot, tpl('F战斗.png'), timeout=5)
-    if fight is None:
-        bot._log('[FAIL] 未检测到战斗按钮')
-        return False
-    bot._log('点击战斗...')
-    _click(bot, fight)
-    # 点完战斗直接扫描：只有体力不足才弹体力弹窗，由循环内体力检测处理
-    time.sleep(2)
+        fight = _await_fight_button(bot, timeout=8)
+        if fight is None:
+            bot._log('[FAIL] 未检测到战斗按钮')
+            return False
+        bot._log('点击战斗...')
+        _click(bot, fight)
+        # 点完战斗直接扫描：只有体力不足才弹体力弹窗，由循环内体力检测处理
+        time.sleep(2)
 
     timeout = GAME_CONFIG.battle_end_timeout
     bot._log(f'战斗中，每 2s 扫结束标志（最多 {timeout}s）...')
@@ -242,17 +264,14 @@ def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) 
                 return True
         else:
             seen = 0
-        if _find(bot, tpl('体力兑换.png'), multi_scale=False) is not None:
-            if not use_stamina_potion:
-                bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线（未开启自动用体力药）')
-                return False
-            if not _use_stamina_potion(bot):
-                return False
-            # 兑换后可能回到准备画面，重新点战斗；若已自动开战则找不到按钮，继续扫描
+        stamina = _handle_out_of_stamina(bot, use_stamina_potion)
+        if stamina is False:
+            return False
+        if stamina:
             time.sleep(1.5)
-            again = _find(bot, '主线战斗.png')
+            again = _find(bot, '主线战斗.png', multi_scale=False)
             if again is None:
-                again = _abs_pos(bot, bot.find_image(tpl('F战斗.png')))
+                again = _find(bot, tpl('F战斗.png'), multi_scale=False)
             if again is not None:
                 bot._log('重新点击战斗...')
                 _click(bot, again)
@@ -262,28 +281,95 @@ def _wait_story_battle(bot, use_preset: bool, use_stamina_potion: bool = False) 
     return True
 
 
+
+def _entry_button_names():
+    return (
+        '主线战斗.png',
+        '主线跳过.png',
+        '异常排除.png',
+        tpl('F战斗.png'),
+        tpl('手动.png'),
+    )
+
+
+def _scan_buttons(bot, names, multi_scale):
+    hits = {}
+    for name in names:
+        pos = _find(bot, name, multi_scale=multi_scale)
+        if pos is not None:
+            hits[os.path.basename(name)] = pos
+    return hits
+
+
+def _await_fight_button(bot, timeout):
+    names = ('主线战斗.png', tpl('F战斗.png'))
+    deadline = time.time() + timeout
+    while time.time() < deadline and bot.is_running:
+        hits = _scan_buttons(bot, names, False)
+        if not hits:
+            hits = _scan_buttons(bot, names, True)
+        pos = hits.get('主线战斗.png') or hits.get('F战斗.png')
+        if pos is not None:
+            return pos
+        time.sleep(0.2)
+    return None
+
+
 def _wait_battle_entry(bot):
-    """点前往挑战后有 Scripts Loading，最多等 25s 直到出现战斗/跳过/结算。"""
     deadline = time.time() + 25
     while time.time() < deadline and bot.is_running:
-        time.sleep(1.2)
-        if (_find(bot, '主线战斗.png') is not None
-                or _find(bot, '主线跳过.png') is not None
-                or _find(bot, '异常排除.png') is not None
-                or bot.find_image(tpl('F战斗.png')) is not None):
-            break
+        popup = _find(bot, '关卡弹窗前往挑战.png', threshold=0.80, multi_scale=False)
+        if popup is not None:
+            bot._log('弹窗还在，再次点击前往挑战')
+            _click(bot, popup)
+            time.sleep(1.0)
+            continue
+        names = _entry_button_names()
+        hits = _scan_buttons(bot, names, False)
+        fight = hits.get('主线战斗.png') or hits.get('F战斗.png')
+        if (fight is None and '主线跳过.png' not in hits
+                and '异常排除.png' not in hits):
+            for name, pos in _scan_buttons(bot, names, True).items():
+                hits.setdefault(name, pos)
+            fight = hits.get('主线战斗.png') or hits.get('F战斗.png')
+        if not hits:
+            time.sleep(0.2)
+            continue
+        if fight is not None:
+            manual = hits.get('手动.png')
+            if manual is not None:
+                bot._log('点击手动，改为自动')
+                _click(bot, manual)
+                time.sleep(0.15)
+            if GAME_CONFIG.zhuxian_use_preset:
+                if not setup_preset(bot):
+                    bot._log('[WARN] 预设失败，继续用场上队伍')
+            bot._log('点击战斗...')
+            _click(bot, fight)
+            time.sleep(2)
+            return True
+        if '主线跳过.png' in hits:
+            bot._log('点击跳过')
+            _click(bot, hits['主线跳过.png'])
+            time.sleep(0.3)
+            continue
+        if '异常排除.png' in hits:
+            return False
+        time.sleep(0.2)
+    return False
 
 
 def _map_new_marker(bot):
     """地图 NEW：先模板（960 下经常 miss），失败用黄色色块兜底。色块只在地图
     ROI 内认——排除标题栏、底栏聊天、子关弹窗金色图标——取最靠中线的（主进度），
     不能把任意黄色轮廓当主线进度。"""
-    marker = _find(bot, '主线NEW.png')
+    gw = bot.game_window
+    y_hi = int(gw.height * 0.82)
+    marker = _find(bot, '主线NEW.png', region=(0, 40, gw.width, y_hi))
     if marker is not None:
         return marker
-    gw = bot.game_window
     yellows = [p for p in find_all_by_color(bot, target_rgb=(255, 214, 40), tolerance=45)
-               if gw.top + 40 < p[1] < gw.top + int(gw.height * 0.82)
+               if gw.top + 40 < p[1] < gw.top + y_hi
                and not (p[0] > gw.left + gw.width * 0.72
                         and p[1] < gw.top + gw.height * 0.42)]
     if not yellows:
@@ -303,10 +389,21 @@ def _near_lock(bot, marker):
 
 def _on_chapter_select(bot) -> bool:
     """章节选择页：CHAPTER / 普通模式。章节名也会出现在关卡地图里，不能单独当信号。"""
-    return (
-        _find(bot, '主线章节.png') is not None
-        or _find(bot, '普通模式.png') is not None
-    )
+    return _find(bot, '主线章节.png') is not None or _find(bot, '普通模式.png') is not None
+
+
+def _enter_chapter_card(bot) -> bool:
+    """要打的章在中间时点正中一次进图；锁了点左、已通关点右后再点正中。"""
+    gw = bot.game_window
+    mid = (gw.left + gw.width // 2, gw.top + gw.height // 2)
+    bot._log(f'点击章节正中 {mid}'); _click(bot, mid); time.sleep(2)
+    if not _on_chapter_select(bot):
+        return True
+    fx = 0.18 if _find(bot, '主线锁定.png') else 0.86
+    side = (gw.left + int(gw.width * fx), gw.top + int(gw.height * 0.42))
+    bot._log(f'点击侧章 {side}'); _click(bot, side); time.sleep(2)
+    bot._log(f'点击章节正中 {mid}'); _click(bot, mid); time.sleep(2)
+    return not _on_chapter_select(bot)
 
 
 def _already_in_story_flow(bot) -> bool:
@@ -369,21 +466,12 @@ def _enter_from_home(bot) -> bool:
         _click(bot, pos)
         time.sleep(1.5)
 
-    if not _click_story_tab(bot):
-        return False
-
-    if _already_in_story_flow(bot):
-        return True
-
-    bot._log('点击当前章节...')
-    card = wait_for_image(bot, _ztpl('主线章节名.png'), timeout=6)
-    if card is None:
-        card = wait_for_image(bot, _ztpl('主线章节.png'), timeout=5)
-    if card is None:
-        bot._log('[FAIL] 未找到章节卡')
-        return False
-    _click(bot, card)
-    time.sleep(2)
+    if not on_chapter:
+        if not _click_story_tab(bot):
+            return False
+        if _already_in_story_flow(bot):
+            return True
+    _enter_chapter_card(bot)
     return True
 
 
@@ -432,12 +520,10 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                     return False
                 stale = 0
                 continue
-            if bot.find_image(tpl('体力兑换.png')) is not None:
-                if not use_stamina_potion:
-                    bot._log('[WARN] STAMINA_MISSING: 体力不足，停止主线')
-                    return False
-                if not _use_stamina_potion(bot):
-                    return False
+            stamina = _handle_out_of_stamina(bot, use_stamina_potion)
+            if stamina is False:
+                return False
+            if stamina:
                 stale = 0
                 continue
 
@@ -523,8 +609,19 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                 fighting_stage = stage or last_stage
                 bot._log('点击前往挑战')
                 _click(bot, go)
-                _wait_battle_entry(bot)
+                started = _wait_battle_entry(bot)
                 stale = 0
+                if started:
+                    result = _wait_story_battle(
+                        bot, use_preset, use_stamina_potion, already_started=True)
+                    if result == 'failed':
+                        fail_count += 1
+                        bot._log(f'战斗失败 {fail_count}/3')
+                        if fail_count >= 3:
+                            bot._log('[FAIL] 连续 3 次战斗失败（系统陷落），停止主线')
+                            return False
+                    elif not result:
+                        return False
                 continue
 
             # 5.5 关卡选择弹窗：底部「敌方情报」金色图标也是黄色且更靠中线，
@@ -558,13 +655,36 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                     _click_blank(bot)
                     continue
                 fighting_stage = stage or last_stage
+                fresh = _find(bot, '关卡弹窗前往挑战.png', threshold=0.80, multi_scale=False)
+                if fresh is not None:
+                    popup_go = fresh
                 bot._log('关卡弹窗：点击前往挑战')
                 _click(bot, popup_go)
-                _wait_battle_entry(bot)
+                new_miss = 0
+                started = _wait_battle_entry(bot)
                 stale = 0
+                if started:
+                    result = _wait_story_battle(
+                        bot, use_preset, use_stamina_potion, already_started=True)
+                    if result == 'failed':
+                        fail_count += 1
+                        bot._log(f'战斗失败 {fail_count}/3')
+                        if fail_count >= 3:
+                            bot._log('[FAIL] 连续 3 次战斗失败（系统陷落），停止主线')
+                            return False
+                    elif not result:
+                        return False
                 continue
 
-            # 6. 当前进度 NEW（模板 miss 时的黄色色块兜底见 _map_new_marker）
+            # 6. 章节选择先于地图 NEW（底栏/特殊篇 NEW 不是地图节点）
+            if _on_chapter_select(bot):
+                stale = 0 if _enter_chapter_card(bot) else stale + 1
+                if stale >= GAME_CONFIG.zhuxian_stale_rounds:
+                    bot._log('[FAIL] 章节选择无法进图')
+                    return False
+                continue
+
+            # 7. 当前进度 NEW（模板 miss 时的黄色色块兜底见 _map_new_marker）
             marker = _map_new_marker(bot)
             if marker is not None:
                 if _near_lock(bot, marker):
@@ -580,10 +700,16 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                                 marker[1] + int(gw.height * 40 / 1098))
                     bot._log(f'点击 NEW 卡面 {face}')
                     _click(bot, face)
-                    time.sleep(1.8)
-                    opened = (_find(bot, '主线跳过.png') or _find(bot, '主线剧情自动.png')
+                    opened = False
+                    for _ in range(20):
+                        if not bot.is_running:
+                            break
+                        opened = (_find(bot, '主线跳过.png') or _find(bot, '主线剧情自动.png')
                               or _find(bot, '关卡弹窗前往挑战.png', threshold=0.80)
                               or _find(bot, '获得物品.png', threshold=0.85))
+                        if opened:
+                            break
+                        time.sleep(0.4)
                     if opened:
                         new_miss = 0
                     else:
@@ -593,18 +719,6 @@ def run_zhuxian_battle(bot, character_name: str = '', difficulty: str = '',
                             return False
                 stale = 0
                 continue
-
-            # 7. 章节选择页（必须 CHAPTER/普通模式 同时在，避免点到地图上的章节名）
-            if _on_chapter_select(bot):
-                card = _find(bot, '主线章节名.png')
-                if card is None:
-                    card = _find(bot, '主线章节.png')
-                if card is not None:
-                    bot._log('点击章节卡进入地图')
-                    _click(bot, card)
-                    time.sleep(2)
-                    stale = 0
-                    continue
 
             # 8. 底栏主线 / 主页挑战
             bar = _bottom_bar_region(bot)

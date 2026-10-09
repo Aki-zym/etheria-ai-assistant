@@ -99,9 +99,86 @@ def test_map_new_on_timeline_clicks_badge(monkeypatch):
     assert clicks[0] == marker
 
 
+def test_map_new_ignores_bottom_bar(monkeypatch):
+    gw = _gw()
+    bot = FakeBot(gw)
+    bottom = (gw.left + 568, gw.top + int(gw.height * 0.94))  # 底栏主线 NEW
+
+    def handler(name, ms, t, r):
+        if name.endswith('主线NEW.png'):
+            if r is not None and r[3] <= int(gw.height * 0.82):
+                return None
+            return bottom
+        return None
+
+    _patch_find(monkeypatch, handler)
+    monkeypatch.setattr(zb, 'find_all_by_color', lambda b, **kw: [bottom])
+    assert zb._map_new_marker(bot) is None
+    assert zb._already_in_story_flow(bot) is False
+
+
+def test_chapter_select_clicks_screen_center(monkeypatch):
+    gw = _gw()
+    bot = FakeBot(gw, alive=3)
+    mid = (gw.left + gw.width // 2, gw.top + gw.height // 2)
+    state = {'select': True}
+
+    def handler(name, ms, t, r):
+        if state['select'] and (name.endswith('普通模式.png') or name.endswith('主线章节.png')):
+            return (gw.left + 240, gw.top + 220)
+        return None
+
+    _patch_find(monkeypatch, handler)
+    monkeypatch.setattr(zb, 'find_all_by_color', lambda b, **kw: [])
+    clicks = []
+
+    def fake_click(hwnd, x, y):
+        clicks.append((x, y))
+        if (x, y) == mid:
+            state['select'] = False
+    monkeypatch.setattr(zb, 'post_click', fake_click)
+
+    zb.run_zhuxian_battle(bot, stop_stage='10-20', from_home=False)
+    assert clicks[0] == mid
+
+
+def test_chapter_select_clicks_right_then_center(monkeypatch):
+    gw = _gw()
+    bot = FakeBot(gw, alive=4)
+    mid = (gw.left + gw.width // 2, gw.top + gw.height // 2)
+    right = (gw.left + int(gw.width * 0.86), gw.top + int(gw.height * 0.42))
+    bottom_new = (gw.left + 568, gw.top + int(gw.height * 0.94))
+    state = {'select': True, 'switched': False}
+
+    def handler(name, ms, t, r):
+        if state['select'] and (name.endswith('普通模式.png') or name.endswith('主线章节.png')):
+            return (gw.left + 240, gw.top + 220)
+        if name.endswith('主线NEW.png'):
+            if r is not None and r[3] <= int(gw.height * 0.82):
+                return None
+            return bottom_new
+        return None
+
+    _patch_find(monkeypatch, handler)
+    monkeypatch.setattr(zb, 'find_all_by_color', lambda b, **kw: [bottom_new])
+    clicks = []
+
+    def fake_click(hwnd, x, y):
+        clicks.append((x, y))
+        if (x, y) == right:
+            state['switched'] = True
+        if state['switched'] and (x, y) == mid:
+            state['select'] = False
+    monkeypatch.setattr(zb, 'post_click', fake_click)
+
+    zb.run_zhuxian_battle(bot, stop_stage='10-20', from_home=False)
+    assert clicks[:3] == [mid, right, mid]
+    assert bottom_new not in clicks
+
+
 def test_map_new_stuck_stops(monkeypatch):
     gw = _gw()
-    bot = FakeBot(gw, alive=20)
+    bot = FakeBot(gw, alive=120)
     marker = (gw.left + 1000, gw.top + 531)
     _patch_find(monkeypatch, lambda n, ms, t, r: marker if n.endswith('主线NEW.png') else None)
     monkeypatch.setattr(zb, 'find_all_by_color', lambda b, **kw: [])

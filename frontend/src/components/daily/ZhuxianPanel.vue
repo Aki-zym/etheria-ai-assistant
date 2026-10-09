@@ -79,7 +79,7 @@ async function stopTask() {
       </div>
       <label class="opt">
         <input type="checkbox" v-model="usePotion" class="check" />
-        体力不足自动用药
+        体力不足自动兑换
       </label>
       <label class="from-home">
         <input type="checkbox" v-model="fromHome" class="check" />
@@ -87,7 +87,7 @@ async function stopTask() {
       </label>
     </label>
     <p class="hint-text">
-      从主界面点挑战 → 主线 → 当前章节，按 NEW 节点推进。剧情自动跳过，打完停止关结束。后面章节把「打到」改成 5-7 即可。
+      从主界面点挑战 → 主线 → 当前章节，按 NEW 节点推进。剧情自动跳过，打完停止关结束。勾上自动兑换时，稳定值弹窗会点红色「兑换稳定值」。后面章节把「打到」改成 5-7 即可。
     </p>
     <div class="start-area">
       <button class="btn btn-primary" @click="start" :disabled="status.busy">
